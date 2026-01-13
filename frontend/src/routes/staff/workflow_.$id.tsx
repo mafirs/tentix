@@ -56,6 +56,8 @@ function RouteComponent() {
   const nodeItems = useMemo(
     () => [
       { id: NodeType.START, label: "开始", desc: "入口节点", icon: Play },
+      { id: NodeType.MCP, label: "MCP", desc: "写入 variables.mcp（stub）", 
+        icon: Bot },
       {
         id: NodeType.SMART_CHAT,
         label: "智能聊天",

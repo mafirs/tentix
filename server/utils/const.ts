@@ -162,6 +162,7 @@ export enum NodeType {
   ESCALATION_OFFER = "escalationOffer", // 升级询问
   VARIABLE_SETTER = "variableSetter", // 变量设置
   RAG = "rag", // 检索增强生成
+  MCP = "mcp",
   START = "start", // 哨兵节点
   END = "end",
 }
@@ -236,12 +237,49 @@ export interface RagConfig extends BaseNodeConfig {
   };
 }
 
+export interface McpConfig extends BaseNodeConfig {
+  type: NodeType.MCP;
+  config: {
+    /**
+      * 可选：是否启用 MCP。
+      * - 不填/undefined：按 true 处理（为了“新建节点不配置也能跑通”）
+      * - false：节点仍会写 variables.mcp，但 status=disabled
+      */
+    enabled?: boolean;
+
+    /**
+     * MCP 服务的 base URL，例如：http://127.0.0.1:8787
+     * 注意：不在这里做校验（MVP），后端执行时校验非空即可
+     */
+    baseUrl?: string;
+    /**
+     * 可调用接口列表（存入 workflow.nodes[].config）
+     */
+    apis?: Array<{
+      id: string;
+      name: string;
+      method: "GET" | "POST";
+      path: string; // 例如：/api/quota
+    }>;
+    /**
+     * 当前执行接口
+     */
+    selectedApiId?: string;
+    // AI 自动选择接口（MVP）
+    enableAiSelection?: boolean;
+    systemPrompt?: string;
+    userPrompt?: string;
+    llm?: LLMConfig;
+  };
+}
+
 export type NodeConfig =
   | EmotionDetectionConfig
   | HandoffConfig
   | EscalationOfferConfig
   | SmartChatConfig
   | RagConfig
+  | McpConfig
   | BaseNodeConfig;
 
 export type NodeConfigData =
@@ -249,7 +287,8 @@ export type NodeConfigData =
   | HandoffConfig["config"]
   | EscalationOfferConfig["config"]
   | SmartChatConfig["config"]
-  | RagConfig["config"];
+  | RagConfig["config"]
+  | McpConfig["config"];
 export interface LLMConfig {
   apiKey?: string; // 可不填 -> 用全局 OPENAI_CONFIG
   baseURL?: string; // 可不填 -> 用全局 OPENAI_CONFIG
@@ -285,6 +324,7 @@ export interface WorkflowConfig {
     | EscalationOfferConfig
     | SmartChatConfig
     | RagConfig
+    | McpConfig
     | BaseNodeConfig
   >;
   edges: WorkflowEdge[];

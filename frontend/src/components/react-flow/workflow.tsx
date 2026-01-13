@@ -29,6 +29,7 @@ import HandOff from "@comp/react-flow/nodes/hand-off";
 import SmartChat from "@comp/react-flow/nodes/smart-chat";
 import EscalationOffer from "@comp/react-flow/nodes/escalation-offer";
 import Rag from "@comp/react-flow/nodes/rag";
+import Mcp from "@comp/react-flow/nodes/mcp";
 import StartNode from "@comp/react-flow/nodes/start";
 import EndNode from "@comp/react-flow/nodes/end";
 import { ConditionEdge } from "@comp/react-flow/edgs/condition-edge";
@@ -45,6 +46,7 @@ const nodeTypes = {
   [NodeType.SMART_CHAT]: SmartChat,
   [NodeType.ESCALATION_OFFER]: EscalationOffer,
   [NodeType.RAG]: Rag,
+  [NodeType.MCP]: Mcp,
   [NodeType.END]: EndNode,
 };
 

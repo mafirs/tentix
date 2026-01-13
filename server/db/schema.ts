@@ -41,6 +41,7 @@ import {
   SmartChatConfig,
   WorkflowEdge,
   BaseNodeConfig,
+  McpConfig,
 } from "@/utils/const";
 
 export const tentix = pgSchema("tentix");
@@ -931,6 +932,7 @@ export const workflow = tentix.table(
           | HandoffConfig
           | EscalationOfferConfig
           | SmartChatConfig
+          | McpConfig
           | BaseNodeConfig
         >
       >()
