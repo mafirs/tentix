@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { RouteTransition } from "@comp/page-transition";
 import WorkflowEditor from "@comp/react-flow/workflow";
@@ -14,6 +14,11 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  Input,
   AppDots6Icon,
   useToast,
 } from "tentix-ui";
@@ -36,6 +41,38 @@ import { cn } from "@lib/utils";
 import { useAiChatModal } from "@comp/react-flow/components/chat-modal/use-chat-modal";
 import { createAndAddNode } from "@comp/react-flow/tools";
 
+type WorkflowTestEnv = { zone: string; namespace: string };
+const WORKFLOW_TEST_ENV_KEY_PREFIX = "workflowTestEnv:";
+
+function getWorkflowTestEnvKey(workflowId: string) {
+  return `${WORKFLOW_TEST_ENV_KEY_PREFIX}${workflowId}`;
+}
+
+function readWorkflowTestEnv(workflowId: string): WorkflowTestEnv {
+  if (typeof window === "undefined") return { zone: "", namespace: "" };
+  try {
+    const raw = localStorage.getItem(getWorkflowTestEnvKey(workflowId));
+    if (!raw) return { zone: "", namespace: "" };
+    const parsed = JSON.parse(raw) as Partial<WorkflowTestEnv>;
+    return {
+      zone: typeof parsed.zone === "string" ? parsed.zone : "",
+      namespace: typeof parsed.namespace === "string" ? parsed.namespace : "",
+    };
+  } catch {
+    return { zone: "", namespace: "" };
+  }
+}
+
+function writeWorkflowTestEnv(workflowId: string, env: WorkflowTestEnv) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(getWorkflowTestEnvKey(workflowId), JSON.stringify(env));
+}
+
+function clearWorkflowTestEnv(workflowId: string) {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(getWorkflowTestEnvKey(workflowId));
+}
+
 export const Route = createFileRoute("/staff/workflow_/$id")({
   head: ({ params }) => ({
     meta: [{ title: `工作流 #${params.id} | Tentix` }],
@@ -52,6 +89,49 @@ function RouteComponent() {
   const { toast } = useToast();
 
   const { openUseChatModal, useChatModal } = useAiChatModal();
+
+  // ===== 对话测试设置（仅对“对话测试”生效）=====
+  const [testSettingsOpen, setTestSettingsOpen] = useState(false);
+  const [testZone, setTestZone] = useState("");
+  const [testNamespace, setTestNamespace] = useState("");
+
+  const openTestSettings = useCallback(() => {
+    const env = readWorkflowTestEnv(id);
+    setTestZone(env.zone);
+    setTestNamespace(env.namespace);
+    setTestSettingsOpen(true);
+  }, [id]);
+
+  const handleSaveTestSettings = useCallback(() => {
+    const zone = testZone.trim();
+    const namespace = testNamespace.trim();
+
+    if (!zone || !namespace) {
+      toast({
+        title: "请填写 zone 和 namespace",
+        description: "这两个参数仅在“对话测试”中给 MCP 节点使用",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    writeWorkflowTestEnv(id, { zone, namespace });
+    toast({
+      title: "已保存",
+      description: "仅对对话测试生效（需要重新打开对话测试/重新连接后生效）",
+    });
+    setTestSettingsOpen(false);
+  }, [id, testZone, testNamespace, toast]);
+
+  const handleClearTestSettings = useCallback(() => {
+    clearWorkflowTestEnv(id);
+    setTestZone("");
+    setTestNamespace("");
+    toast({
+      title: "已清空",
+      description: "已清空对话测试的 zone/namespace；之后对话测试将不再传参",
+    });
+  }, [id, toast]);
 
   const nodeItems = useMemo(
     () => [
@@ -316,7 +396,7 @@ function RouteComponent() {
                 <Button
                   variant="outline"
                   className="flex items-center justify-center h-10 rounded-r-none border-l-0 rounded-l-none border-r border-zinc-200 hover:bg-zinc-50 text-sm font-normal text-zinc-700"
-                  onClick={() => () => {}}
+                  onClick={openTestSettings}
                 >
                   <Settings className="h-4 w-4" strokeWidth={1.33} />
                 </Button>
@@ -358,6 +438,52 @@ function RouteComponent() {
       </div>
       {/* modal */}
       {useChatModal}
+
+      {/* 右上角设置：仅用于“对话测试”的 zone/namespace 配置 */}
+      <Dialog open={testSettingsOpen} onOpenChange={setTestSettingsOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>对话测试设置</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="text-xs text-muted-foreground">
+              这里配置的 zone / namespace 仅在“对话测试”时传给 MCP 节点使用，不影响任何线上服务。
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Zone</div>
+              <Input
+                value={testZone}
+                onChange={(e) => setTestZone(e.target.value)}
+                placeholder="例如：cn-shanghai"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Namespace</div>
+              <Input
+                value={testNamespace}
+                onChange={(e) => setTestNamespace(e.target.value)}
+                placeholder="例如：ns-xxxxxx"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setTestSettingsOpen(false)}
+              >
+                取消
+              </Button>
+              <Button variant="outline" onClick={handleClearTestSettings}>
+                清空
+              </Button>
+              <Button onClick={handleSaveTestSettings}>保存</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </RouteTransition>
   );
 }

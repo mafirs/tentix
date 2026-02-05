@@ -1,4 +1,4 @@
-import { WorkflowState, getVariables } from "./workflow-tools";
+import { WorkflowState, getVariables, buildMultimodalUserContent } from "./workflow-tools";
 import { DEFAULT_API_KEY, DEFAULT_BASE_URL, DEFAULT_MODEL } from "./workflow-tools";
 import { type McpConfig } from "@/utils/const";
 import { logError } from "@/utils/log";
@@ -34,6 +34,17 @@ function toShortString(x: unknown, maxLen: number): string {
 function toNonEmptyTrimmed(x: unknown): string | null {
   const s = typeof x === "string" ? x.trim() : String(x ?? "").trim();
   return s.length > 0 ? s : null;
+}
+
+function getZoneNsFromWorkflowTestSettings(state: WorkflowState): {
+  zone: string | null;
+  namespace: string | null;
+} {
+  const vars = (state.variables ?? {}) as Record<string, unknown>;
+  return {
+    zone: toNonEmptyTrimmed(vars["__workflowTestZone"]),
+    namespace: toNonEmptyTrimmed(vars["__workflowTestNamespace"]),
+  };
 }
 
 async function getZoneNsByTicketId(ticketId: string): Promise<{
@@ -115,8 +126,20 @@ export async function mcpNode(
       return { variables: { mcp: nextMcp } };
     }
     
-    const { zone, namespace } = await getZoneNsByTicketId(ticketId);
-    
+    // ✅ 优先用“对话测试”注入的 zone/namespace（仅对话测试 WS 会注入）
+    const injected = getZoneNsFromWorkflowTestSettings(state);
+    let zone: string | null = injected.zone;
+    let namespace: string | null = injected.namespace;
+    let source: "workflow_test_settings" | "tickets" = "workflow_test_settings";
+
+    // 没有注入时，走原逻辑：从 tickets 表取
+    if (!zone || !namespace) {
+      const fromTicket = await getZoneNsByTicketId(ticketId);
+      zone = fromTicket.zone;
+      namespace = fromTicket.namespace;
+      source = "tickets";
+    }
+
     if (!zone || !namespace) {
       const missing: string[] = [];
       if (!zone) missing.push("tickets.area");
@@ -128,8 +151,8 @@ export async function mcpNode(
         ticketId,
         zone: zone ?? undefined,
         namespace: namespace ?? undefined,
-        source: "tickets",
-        reason: `missing ${missing.join(", ")}`,
+        source,
+        reason: `missing ${missing.join(", ")} (workflow test can set zone/namespace in top-right settings)`,
         result: null,
         updatedAt: now,
       };
@@ -349,8 +372,8 @@ if (!path) {
   };
 }
 
-// MVP：先只允许 GET
-if (method !== "GET") {
+// MVP：支持 GET / POST（POST 会附带 JSON body）
+if (method !== "GET" && method !== "POST") {
   return {
     variables: {
       mcp: {
@@ -361,7 +384,7 @@ if (method !== "GET") {
         namespace,
         source: "tickets",
         apiId: api.id,
-        reason: `method ${method} not supported in MVP (only GET)`,
+        reason: `method ${method} not supported (only GET/POST)`,
         result: null,
         updatedAt: now,
       },
@@ -394,10 +417,33 @@ try {
   };
 }
 
-// 3) 执行 fetch（MVP：读取 text 并写入 mcp.result，保证 {{ mcp.result }} 可见）
+// 3) 执行 fetch（GET: 无 body；POST: 附带 JSON body，上下文供 skills 服务使用）
 let resp: Response;
 try {
-  resp = await fetch(url.toString(), { method: "GET" });
+  const fetchOptions: RequestInit = { method };
+
+  if (method === "POST") {
+    const latestMessageImages = buildMultimodalUserContent("", state, false)
+      .flatMap((it) => (it.type === "image_url" ? [it.image_url.url] : []));
+    const payload = {
+      ticketId,
+      zone,
+      namespace,
+      ticketTitle: variables.ticketTitle,
+      ticketModule: variables.ticketModule,
+      ticketDescription: variables.ticketDescription,
+      historyMessages: variables.historyMessages,
+      latestMessage: variables.lastCustomerMessage,
+      latestMessageImages,
+    };
+
+    fetchOptions.headers = {
+      "Content-Type": "application/json",
+    };
+    fetchOptions.body = JSON.stringify(payload);
+  }
+
+  resp = await fetch(url.toString(), fetchOptions);
 } catch (e) {
   return {
     variables: {
