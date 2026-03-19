@@ -41,12 +41,12 @@ function readWorkflowTestEnv(
 }
 
 function getWsOrigin() {
-  // In devbox/remote dev scenarios, browser "localhost" is NOT the server.
-  // Use current page origin so Vite can proxy websocket to backend.
+  // Prefer direct backend websocket connection for local/server deployments.
   if (typeof window === "undefined") return "ws://localhost:3000";
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}`;
+  return `${protocol}//localhost:3000`;
 }
+
 
 interface UseWorkflowChatWebSocketProps {
   onError?: (error: any) => void;
