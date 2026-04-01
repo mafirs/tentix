@@ -44,7 +44,7 @@ function getWsOrigin() {
   // Prefer direct backend websocket connection for local/server deployments.
   if (typeof window === "undefined") return "ws://localhost:3000";
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//localhost:3000`;
+  return `${protocol}//${window.location.host}`;
 }
 
 
