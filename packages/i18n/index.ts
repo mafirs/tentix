@@ -549,6 +549,26 @@ export const translations = {
             },
           },
         },
+        mcp: {
+          enabled: "Enabled",
+          ai_auto_select_api: "AI Auto-select API",
+          system_prompt_placeholder:
+            "System prompt for AI API selection (Liquid variables supported)",
+          user_prompt_placeholder:
+            "User prompt for AI API selection (Liquid variables supported)",
+          ai_selection_hint:
+            "Tip: After AI is enabled, the backend first asks AI to select an API from the apis allowlist. If AI fails, it falls back to the manually selected selectedApiId.",
+          supported_apis: "Supported APIs (apis)",
+          add_api: "Add",
+          empty_api_hint:
+            "No APIs yet. Click \"Add\" to add one first (recommended: quota: GET /api/quota)",
+          delete_api: "Delete",
+          api_path_placeholder: "Enter API path",
+          selected_api: "Current execution API (selectedApiId)",
+          select_api: "Select an API",
+          add_api_first: "Add an API first",
+          fallback_api_hint: "Default API when AI is disabled",
+        },
         ui: {
           dialog_title_edit_text: "Edit text content",
           tip_press: "Press",
@@ -1085,6 +1105,26 @@ export const translations = {
               hasRetrievedContext: "是否有检索到的上下文 (true/false)",
             },
           },
+        },
+        mcp: {
+          enabled: "启用",
+          ai_auto_select_api: "AI 自动选择接口",
+          system_prompt_placeholder:
+            "用于 AI 选择接口的系统提示词（支持 Liquid 变量）",
+          user_prompt_placeholder:
+            "用于 AI 选择接口的用户提示词（支持 Liquid 变量）",
+          ai_selection_hint:
+            "提示：开启 AI 后，后端会先让 AI 在 apis 白名单里选一个接口；AI 失败会回退到你手动选择的 selectedApiId。",
+          supported_apis: "支持接口（apis）",
+          add_api: "新增",
+          empty_api_hint:
+            "还没有接口，点击“新增”添加一条（建议先加 quota: GET /api/quota）",
+          delete_api: "删除",
+          api_path_placeholder: "请填写接口地址",
+          selected_api: "当前执行接口（selectedApiId）",
+          select_api: "请选择接口",
+          add_api_first: "请先新增接口",
+          fallback_api_hint: "关闭AI默认执行的接口",
         },
         ui: {
           dialog_title_edit_text: "编辑文本内容",

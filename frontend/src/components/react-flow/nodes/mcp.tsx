@@ -31,6 +31,7 @@ import {
   ScrollBar,
 } from "tentix-ui";
 import { WorkflowTextarea } from "@comp/react-flow/components/workflow-textarea";
+import { useTranslation } from "i18n";
 
 type McpNodeData = (McpConfig["config"] & {
   name: string;
@@ -39,6 +40,7 @@ type McpNodeData = (McpConfig["config"] & {
 });
 
 const Mcp: React.FC<NodeProps<Node<McpNodeData>>> = ({ id, data }) => {
+  const { t } = useTranslation();
   const removeNode = useWorkflowStore((s) => s.removeNode);
   const updateNode = useWorkflowStore((s) => s.updateNode);
 
@@ -131,7 +133,7 @@ const removeApi = (id: string) => {
               <div className="text-xs text-muted-foreground mb-3"></div>
 
               <div className="flex items-center justify-between">
-                <Label className="text-sm">启用</Label>
+                <Label className="text-sm">{t("rf.mcp.enabled")}</Label>
                 <Switch
                   className="nodrag"
                   checked={enabled}
@@ -154,7 +156,7 @@ const removeApi = (id: string) => {
               <Separator className="my-3" />
 
               <div className="flex items-center justify-between">
-                <Label className="text-sm">AI 自动选择接口</Label>
+                <Label className="text-sm">{t("rf.mcp.ai_auto_select_api")}</Label>
                 <Switch
                   className="nodrag"
                   checked={!!safeData.enableAiSelection}
@@ -167,7 +169,9 @@ const removeApi = (id: string) => {
                 <WorkflowTextarea
                   className="min-h-[100px]"
                   value={(safeData.systemPrompt ?? "") as string}
-                  placeholder="用于 AI 选择接口的系统提示词（支持 Liquid 变量）"
+                  placeholder={
+                    t("rf.mcp.system_prompt_placeholder") as string
+                  }
                   onChange={(value) => patchConfig({ systemPrompt: value })}
                   nodeId={id}
                 />
@@ -178,36 +182,36 @@ const removeApi = (id: string) => {
                 <WorkflowTextarea
                   className="min-h-[100px]"
                   value={(safeData.userPrompt ?? "") as string}
-                  placeholder="用于 AI 选择接口的用户提示词（支持 Liquid 变量）"
+                  placeholder={
+                    t("rf.mcp.user_prompt_placeholder") as string
+                  }
                   onChange={(value) => patchConfig({ userPrompt: value })}
                   nodeId={id}
                 />
               </div>
 
               <div className="mt-2 text-xs text-muted-foreground">
-                提示：开启 AI 后，后端会先让 AI 在 apis 白名单里选一个接口；AI
-                失败会回退到你手动选择的 selectedApiId。
+                {t("rf.mcp.ai_selection_hint")}
               </div>
 
               <Separator className="my-3" />
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-sm">支持接口（apis）</Label>
+                  <Label className="text-sm">{t("rf.mcp.supported_apis")}</Label>
                   <Button
                     className="nodrag"
                     variant="outline"
                     size="sm"
                     onClick={addApi}
                   >
-                    新增
+                    {t("rf.mcp.add_api")}
                   </Button>
                 </div>
 
                 {apis.length === 0 ? (
                   <div className="text-xs text-muted-foreground">
-                    还没有接口，点击“新增”添加一条（建议先加 quota: GET
-                    /api/quota）
+                    {t("rf.mcp.empty_api_hint")}
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -244,14 +248,14 @@ const removeApi = (id: string) => {
                             size="sm"
                             onClick={() => removeApi(a.id)}
                           >
-                            删除
+                            {t("rf.mcp.delete_api")}
                           </Button>
                         </div>
 
                         <Input
                           className="nodrag"
                           value={a.path}
-                          placeholder="请填写接口地址"
+                          placeholder={t("rf.mcp.api_path_placeholder") as string}
                           onChange={(e) =>
                             updateApi(a.id, { path: e.target.value })
                           }
@@ -269,7 +273,7 @@ const removeApi = (id: string) => {
               <Separator className="my-3" />
 
               <div className="space-y-2">
-                <Label className="text-sm">当前执行接口（selectedApiId）</Label>
+                <Label className="text-sm">{t("rf.mcp.selected_api")}</Label>
                 <Select
                   value={selectedApiId || ""}
                   onValueChange={(v) =>
@@ -279,7 +283,11 @@ const removeApi = (id: string) => {
                 >
                   <SelectTrigger className="nodrag">
                     <SelectValue
-                      placeholder={apis.length ? "请选择接口" : "请先新增接口"}
+                      placeholder={
+                        apis.length
+                          ? (t("rf.mcp.select_api") as string)
+                          : (t("rf.mcp.add_api_first") as string)
+                      }
                     />
                   </SelectTrigger>
                   <SelectContent>
@@ -293,7 +301,7 @@ const removeApi = (id: string) => {
               </div>
 
               <div className="mt-3 text-xs text-muted-foreground">
-                关闭AI默认执行的接口
+                {t("rf.mcp.fallback_api_hint")}
                 <div className="mt-1 font-mono">
                 </div>
               </div>
@@ -303,14 +311,14 @@ const removeApi = (id: string) => {
         </BaseNodeContent>
       </BaseNode>
 
-      {/* 输入 Handles */}
+      {/* Input handles */}
       {(safeData.handles ?? [])
         .filter((h: HandleConfig) => h.type === "target")
         .map((h: HandleConfig) => (
           <WorkflowHandle key={h.id} handle={h} />
         ))}
 
-      {/* 输出 Handles */}
+      {/* Output handles */}
       {(safeData.handles ?? [])
         .filter((h: HandleConfig) => h.type === "source")
         .map((h: HandleConfig, index: number) => (
