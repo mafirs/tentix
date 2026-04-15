@@ -8,6 +8,7 @@ import {
   BaseNodeConfig,
   RagConfig,
   NodeType,
+  McpConfig,
 } from "@/utils/const";
 import {
   WorkflowState,
@@ -18,6 +19,7 @@ import {
   chatNode,
   ragNode,
   getVariables,
+  mcpNode,
 } from "./workflow-node";
 
 import {
@@ -30,7 +32,10 @@ import {
 import { logError } from "@/utils/log.ts";
 
 export class WorkflowBuilder {
+  // workflow 配置（来自 DB）
   private config: WorkflowConfig;
+
+  // 节点 ID 到节点配置的映射
   private nodeMap: Map<
     string,
     | EmotionDetectionConfig
@@ -44,17 +49,18 @@ export class WorkflowBuilder {
     this.config = config;
     this.nodeMap = new Map();
 
-    // 创建节点ID到配置的映射
     for (const node of config.nodes) {
       this.nodeMap.set(node.id, node);
     }
   }
 
+
   build() {
-    // 1. 首先找出所有可达节点（从 START 可达的节点）
+    // 1) 找出所有可达节点（从 START 可达的节点）
     const reachableNodes = this.findReachableNodes();
 
-    // 2. 找出孤岛节点并记录日志
+    // 2) 找出孤岛节点并记录日志
+    // 目的：警告用户有节点不会被执行（可能是配置错误）
     const unreachableNodes = this.config.nodes.filter(
       (node) =>
         !reachableNodes.has(node.id) &&
@@ -67,9 +73,12 @@ export class WorkflowBuilder {
       );
     }
 
+    // 3) 创建 StateGraph 对象
+    // 证据：WorkflowStateAnnotation 定义了 WorkflowState 的结构
     let graph: any = new StateGraph(WorkflowStateAnnotation);
 
-    // 3. 只添加可达的节点
+    // 4) 只添加可达的节点
+    // 为什么跳过 START 和 END：LangGraph 内部处理这两个特殊节点
     for (const node of this.config.nodes) {
       if (node.type === NodeType.START || node.type === NodeType.END) {
         continue;
@@ -80,6 +89,8 @@ export class WorkflowBuilder {
         continue;
       }
 
+      // 翻译：graph.addNode(nodeId, async (state) => {...}) 添加节点到 graph
+      // 目的：定义节点的执行逻辑（调用 executeNode 方法）
       graph = graph.addNode(node.id, async (state: WorkflowState) => {
         return await this.executeNode(
           node as
@@ -92,13 +103,16 @@ export class WorkflowBuilder {
       });
     }
 
-    // 4. 构建边的映射（只包含可达节点的边）
+    // 5) 构建边的映射（只包含可达节点的边）
+    // 为什么用 Map：快速查找某个节点的所有出边
     const edgeMap = new Map<string, WorkflowEdge[]>();
     for (const edge of this.config.edges) {
       // 只添加源和目标都可达的边
       const sourceNode = this.nodeMap.get(edge.source);
       const targetNode = this.nodeMap.get(edge.target);
 
+      // 翻译：?? 是空值合并操作符，左侧为 null/undefined 时返回右侧
+      // 逻辑：START 节点或可达节点才算 sourceReachable
       const sourceReachable =
         sourceNode?.type === NodeType.START || reachableNodes.has(edge.source);
       const targetReachable =
@@ -113,7 +127,8 @@ export class WorkflowBuilder {
       edgeMap.set(edge.source, edges);
     }
 
-    // 添加边
+    // 6) 添加边
+    // 遍历 edgeMap，为每个源节点添加边
     for (const [sourceId, edges] of edgeMap.entries()) {
       if (edges.length === 0) {
         continue;
@@ -125,8 +140,11 @@ export class WorkflowBuilder {
       if (isStartNode) {
         const firstEdge = edges[0];
         // 规则：START 仅允许一条无条件边
+        // 为什么：START 是入口点，只能有一条路径（避免歧义）
         if (edges.length === 1 && firstEdge && !firstEdge.condition) {
           const targetNode = this.nodeMap.get(firstEdge.target);
+          // 翻译：targetNode?.type === NodeType.END ? END : firstEdge.target
+          // 意思：如果是 END 节点，用 LangGraph 的 END 常量；否则用节点 ID
           const target =
             targetNode?.type === NodeType.END ? END : firstEdge.target;
           graph.addEdge(START, target as any);
@@ -140,22 +158,27 @@ export class WorkflowBuilder {
       // 非 START 源
       const firstEdge = edges[0];
       if (edges.length === 1 && firstEdge && !firstEdge.condition) {
-        // 简单边（单一无条件边）
+        // 7) 简单边（单一无条件边）
+        // 为什么：单一边可以直接用 addEdge（条件边需要 addConditionalEdges）
         const targetNode = this.nodeMap.get(firstEdge.target);
         const target =
           targetNode?.type === NodeType.END ? END : firstEdge.target;
         graph.addEdge(sourceId as any, target as any);
       } else {
-        // 条件边（多条边或有条件的边）
+        // 8) 条件边（多条边或有条件的边）
+        // 为什么：需要根据条件动态选择路径
         const conditions = edges
           .filter((e) => !!e.condition)
           .map((e) => ({ edge: e, cond: e.condition as string }));
         const defaultEdge = edges.find((e) => !e.condition);
 
+        // 翻译：graph.addConditionalEdges(sourceId, (state) => {...})
+        // 意思：添加条件边，返回目标节点 ID（根据条件判断）
         graph.addConditionalEdges(sourceId as any, (state: WorkflowState) => {
           const variables = getVariables(state);
 
-          // 检查条件边
+          // 检查条件边（按顺序遍历）
+          // 为什么按顺序：可能存在多个条件都满足，优先匹配第一个
           for (const item of conditions) {
             if (evaluateCondition(item.cond, variables)) {
               const targetNode = this.nodeMap.get(item.edge.target);
@@ -163,7 +186,7 @@ export class WorkflowBuilder {
             }
           }
 
-          // 默认边
+          // 默认边（无条件边）
           if (defaultEdge) {
             const targetNode = this.nodeMap.get(defaultEdge.target);
             return targetNode?.type === NodeType.END ? END : defaultEdge.target;
@@ -174,23 +197,18 @@ export class WorkflowBuilder {
       }
     }
 
+    // 9) 编译返回
+    // 证据：LangGraph 的 StateGraph.compile() 方法返回 CompiledStateGraph
     return graph.compile() as CompiledStateGraph<
       WorkflowState,
       Partial<WorkflowState>
     >;
   }
 
-  /**
-   * 使用 BFS 算法找出从 START 节点可达的所有节点
-   *         ┌──→ 路径 A
-   * START ──┼──→ 路径 B
-   *         └──→ 路径 C
-   */
   private findReachableNodes(): Set<string> {
     const reachable = new Set<string>();
     const queue: string[] = [];
 
-    // 1. 验证 START 节点：必须有且只能有一个
     const startNodes = this.config.nodes.filter(
       (n) => n.type === NodeType.START,
     );
@@ -202,9 +220,8 @@ export class WorkflowBuilder {
         `工作流中有 ${startNodes.length} 个 START 节点，只能有一个 START 节点：${startNodes.map((n) => n.id).join(", ")}`,
       );
     }
-    const startNode = startNodes[0]!; // 已验证 length > 0，安全使用
+    const startNode = startNodes[0]!; 
 
-    // 2. 验证 END 节点：至少要有一个（可以有多个）
     const endNodes = this.config.nodes.filter((n) => n.type === NodeType.END);
     if (endNodes.length === 0) {
       throw new Error("工作流中未找到 END 节点");
@@ -213,7 +230,6 @@ export class WorkflowBuilder {
     queue.push(startNode.id);
     reachable.add(startNode.id);
 
-    // 3. BFS 遍历所有可达节点
     while (queue.length > 0) {
       const currentId = queue.shift()!;
 
@@ -226,7 +242,6 @@ export class WorkflowBuilder {
         if (!reachable.has(edge.target)) {
           reachable.add(edge.target);
           const targetNode = this.nodeMap.get(edge.target);
-          // END 节点不需要继续遍历
           if (targetNode?.type !== NodeType.END) {
             queue.push(edge.target);
           }
@@ -234,7 +249,6 @@ export class WorkflowBuilder {
       }
     }
 
-    // 4. 验证至少有一个 END 节点可达
     const reachableEndNodes = endNodes.filter((n) => reachable.has(n.id));
     if (reachableEndNodes.length === 0) {
       throw new Error(
@@ -242,7 +256,6 @@ export class WorkflowBuilder {
       );
     }
 
-    // 5. 警告：如果有 END 节点不可达
     const unreachableEndNodes = endNodes.filter((n) => !reachable.has(n.id));
     if (unreachableEndNodes.length > 0) {
       logError(
@@ -253,15 +266,18 @@ export class WorkflowBuilder {
     return reachable;
   }
 
+
   private async executeNode(
     node:
       | EmotionDetectionConfig
       | HandoffConfig
       | EscalationOfferConfig
       | SmartChatConfig
-      | RagConfig,
+      | RagConfig
+      | McpConfig,
     state: WorkflowState,
   ): Promise<Partial<WorkflowState>> {
+    // 翻译：switch (node.type) 根据 node.type 匹配对应的 case
     switch (node.type) {
       case NodeType.EMOTION_DETECTOR:
         return await emotionDetectionNode(state, node.config);
@@ -273,7 +289,10 @@ export class WorkflowBuilder {
         return await escalationOfferNode(state, node.config);
       case NodeType.RAG:
         return await ragNode(state, node.config);
+      case NodeType.MCP:
+        return await mcpNode(state, node.config);
       default:
+        // 未知节点类型：记录错误并返回空状态
         logError(`Unknown node type: ${(node as BaseNodeConfig).type}`);
         return {};
     }
@@ -285,7 +304,6 @@ function evaluateCondition(
   variables: Record<string, any>,
 ): boolean {
   try {
-    // 创建一个安全的评估环境
     const func = new Function(
       ...Object.keys(variables),
       `return ${expression}`,

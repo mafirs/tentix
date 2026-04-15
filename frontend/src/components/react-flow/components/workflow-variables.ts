@@ -150,6 +150,7 @@ export const NODE_VARIABLES: Record<NodeType, WorkflowVariable[]> = {
   // Other node types don't have specific variables
   [NodeType.HANDOFF]: [],
   [NodeType.VARIABLE_SETTER]: [],
+  [NodeType.MCP]: [],
   [NodeType.START]: [],
   [NodeType.END]: [],
   [NodeType.SMART_CHAT]: [],

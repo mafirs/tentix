@@ -50,6 +50,8 @@ const querySchema = z.object({
   token: z.string().min(1, "Token cannot be empty"),
   ticketId: z.string().min(1, "TicketId cannot be empty"),
   workflowId: z.string().min(1, "WorkflowId cannot be empty"),
+  zone: z.string().optional(),
+  namespace: z.string().optional(),
 });
 
 // ===== 工具函数 =====
@@ -203,6 +205,16 @@ export async function saveMessageToDb(
   }
 }
 
+function sanitizeTestEnvParam(
+  x: string | undefined,
+  maxLen: number = 120,
+): string | null {
+  if (typeof x !== "string") return null;
+  const s = x.trim();
+  if (!s) return null;
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
 // ===== 主路由 =====
 export const chatRouter = new Hono<AuthEnv>().get(
   "/chat",
@@ -213,7 +225,19 @@ export const chatRouter = new Hono<AuthEnv>().get(
   zValidator("query", querySchema),
   upgradeWebSocket(async (c) => {
     const t = c.get("i18n").getFixedT(detectLocale(c));
-    const { token, ticketId, workflowId } = c.req.query();
+    const {
+      token,
+      ticketId,
+      workflowId,
+      zone: rawZone,
+      namespace: rawNamespace,
+    } = c.req.query();
+
+    // ✅ 仅本 WS 连接生效：对话测试设置
+    const wsTestEnv = {
+      zone: sanitizeTestEnvParam(rawZone),
+      namespace: sanitizeTestEnvParam(rawNamespace),
+    };
 
     try {
       const cryptoKey = c.get("cryptoKey")();
@@ -373,7 +397,7 @@ export const chatRouter = new Hono<AuthEnv>().get(
                 aiProcessManager.startProcessing();
 
                 try {
-                  await aiHandler(ticketId, ws, workflowId);
+                  await aiHandler(ticketId, ws, workflowId, wsTestEnv);
                   // 🆕 AI 处理成功完成
                   aiProcessManager.finishProcessing();
                 } catch (error) {
@@ -438,7 +462,12 @@ export const chatRouter = new Hono<AuthEnv>().get(
   }),
 );
 
-async function aiHandler(ticketId: string, ws: WSContext, workflowId: string) {
+async function aiHandler(
+  ticketId: string,
+  ws: WSContext,
+  workflowId: string,
+  testEnv?: { zone: string | null; namespace: string | null },
+) {
   const db = connectDB();
   const ticket = await db.query.workflowTestTicket.findFirst({
     where: (t, { eq }) => eq(t.id, ticketId),
@@ -462,7 +491,15 @@ async function aiHandler(ticketId: string, ws: WSContext, workflowId: string) {
     throw new Error("AI user not found");
   }
 
-  const result = await getAIResponse(ticket, true, workflowId);
+  const runtimeVariables: Record<string, unknown> | undefined =
+    testEnv?.zone && testEnv?.namespace
+      ? {
+          __workflowTestZone: testEnv.zone,
+          __workflowTestNamespace: testEnv.namespace,
+        }
+      : undefined;
+
+  const result = await getAIResponse(ticket, true, workflowId, runtimeVariables);
   const JSONContent = textToTipTapJSON(result);
   const messageResult = await saveMessageToDb(ticketId, aiUserId, JSONContent);
 

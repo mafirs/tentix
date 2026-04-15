@@ -10,7 +10,43 @@ import useLocalUser from "./use-local-user";
 
 // 常量定义
 const MESSAGE_TIMEOUT = 5000; // 5秒消息发送超时
-const WS_DEV_URL = "ws://localhost:3000";
+
+// 仅用于“对话测试”的 zone/namespace（由工作流编辑页右上角设置写入）
+const WORKFLOW_TEST_ENV_KEY_PREFIX = "workflowTestEnv:";
+
+function getWorkflowTestEnvKey(workflowId: string) {
+  return `${WORKFLOW_TEST_ENV_KEY_PREFIX}${workflowId}`;
+}
+
+function readWorkflowTestEnv(
+  workflowId: string | null,
+): { zone: string | null; namespace: string | null } {
+  if (!workflowId || typeof window === "undefined") {
+    return { zone: null, namespace: null };
+  }
+  try {
+    const raw = localStorage.getItem(getWorkflowTestEnvKey(workflowId));
+    if (!raw) return { zone: null, namespace: null };
+    const parsed = JSON.parse(raw) as { zone?: unknown; namespace?: unknown };
+    const zone = typeof parsed.zone === "string" ? parsed.zone.trim() : "";
+    const namespace =
+      typeof parsed.namespace === "string" ? parsed.namespace.trim() : "";
+    return {
+      zone: zone ? zone : null,
+      namespace: namespace ? namespace : null,
+    };
+  } catch {
+    return { zone: null, namespace: null };
+  }
+}
+
+function getWsOrigin() {
+  // Prefer direct backend websocket connection for local/server deployments.
+  if (typeof window === "undefined") return "ws://localhost:3000";
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
+}
+
 
 interface UseWorkflowChatWebSocketProps {
   onError?: (error: any) => void;
@@ -242,13 +278,15 @@ export const useWorkflowChatWebSocket = ({
     setIsLoading(true);
 
     // 构建 WebSocket URL
-    const wsOrigin = import.meta.env.DEV
-      ? WS_DEV_URL
-      : `wss://${window.location.host}`;
-    const url = new URL("/api/admin/chat", wsOrigin);
+    const url = new URL("/api/admin/chat", getWsOrigin());
     url.searchParams.set("ticketId", currentTicketId);
     url.searchParams.set("workflowId", currentWorkflowId);
     url.searchParams.set("token", token);
+
+    // ✅ 仅对话测试：把 zone/namespace 传给后端（后端只会在 admin/chat 使用）
+    const env = readWorkflowTestEnv(currentWorkflowId);
+    if (env.zone) url.searchParams.set("zone", env.zone);
+    if (env.namespace) url.searchParams.set("namespace", env.namespace);
 
     // 创建 WebSocket 连接
     const ws = new WebSocket(url.toString());
@@ -266,7 +304,8 @@ export const useWorkflowChatWebSocket = ({
       console.error("WebSocket 连接错误:", event);
       resetState();
       clearPendingMessages("WebSocket 连接错误");
-      if (onError) onError(event);
+      // Don't bubble raw Event into UI (it will crash if rendered).
+      if (onError) onError("WebSocket 连接失败，请检查网络/代理/端口转发");
     };
   }, [
     currentTicketId,
