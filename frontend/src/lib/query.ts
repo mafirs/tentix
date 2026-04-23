@@ -5,7 +5,6 @@ import {
 import {
   ticketPriorityEnumArray,
   ticketStatusEnumArray,
-  WS_TOKEN_EXPIRY_TIME,
 } from "tentix-server/constants";
 import { apiClient } from "./api-client";
 
@@ -162,16 +161,60 @@ export const ticketsQueryOptions = (id: string) =>
     refetchOnWindowFocus: true, // 窗口聚焦时重新获取
   });
 
-export const wsTokenQueryOptions = (testUserId?: string) =>
+type WsTokenQueryOptionsConfig = {
+  testUserId?: string;
+  ticketId: string;
+  getSealosKubeconfig?: () => Promise<string | null>;
+};
+
+export const wsTokenQueryOptions = ({
+  testUserId,
+  ticketId,
+  getSealosKubeconfig,
+}: WsTokenQueryOptionsConfig) =>
   queryOptions({
-    queryKey: ["getWsToken"],
+    queryKey: [
+      "getWsToken",
+      ticketId,
+      testUserId ?? "",
+      getSealosKubeconfig ? "with-sealos-kc" : "without-sealos-kc",
+    ],
     queryFn: async () => {
-      const data = await apiClient.chat.token
-        .$get({ query: { testUserId } })
-        .then((r) => r.json());
-      return data;
+      let headers: Record<string, string> | undefined;
+
+      if (getSealosKubeconfig) {
+        try {
+          const sealosKubeconfig = await getSealosKubeconfig();
+          if (sealosKubeconfig) {
+            headers = {
+              "x-sealos-kubeconfig": encodeURIComponent(sealosKubeconfig),
+            };
+          }
+        } catch (error) {
+          console.warn(
+            "Failed to get sealos kubeconfig for ws token request:",
+            error,
+          );
+        }
+      }
+
+      const res = await apiClient.chat.token.$get(
+        { query: { testUserId } },
+        headers ? { headers } : undefined,
+      );
+
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as {
+          message?: string;
+        };
+        throw new Error(err.message || "Failed to get ws token");
+      }
+
+      return await res.json();
     },
-    staleTime: WS_TOKEN_EXPIRY_TIME,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
 export const userInfoQueryOptions = () =>

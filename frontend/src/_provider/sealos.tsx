@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -19,6 +20,14 @@ interface SealosUserInfo {
 
 let sealosInitPromise: Promise<void> | null = null;
 
+interface RefreshedSealosSession {
+  sealosToken: string | null;
+  sealosArea: string | null;
+  sealosUser: SealosUserInfo | null;
+  sealosNs: string | null;
+  sealosKubeconfig: string | null;
+}
+
 interface SealosContextType {
   isInitialized: boolean;
   isLoading: boolean;
@@ -28,14 +37,18 @@ interface SealosContextType {
   sealosArea: string | null;
   sealosUser: SealosUserInfo | null;
   sealosNs: string | null;
+  sealosKubeconfig: string | null;
   currentLanguage: string | null;
+  refreshSealosSession: () => Promise<RefreshedSealosSession | null>;
 }
 
 const SealosContext = createContext<SealosContextType | null>(null);
 
 export function SealosProvider({ children }: { children: React.ReactNode }) {
   const { i18n } = useTranslation();
-  const [state, setState] = useState<SealosContextType>({
+  const [state, setState] = useState<
+    Omit<SealosContextType, "refreshSealosSession">
+  >({
     isInitialized: false,
     isLoading: true,
     isSealos: false,
@@ -44,11 +57,36 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
     sealosArea: null,
     sealosUser: null,
     sealosNs: null,
+    sealosKubeconfig: null,
     currentLanguage: null,
   });
 
   const initializationRef = useRef(false);
   const cleanupRef = useRef<(() => void) | null>(null);
+
+  const refreshSealosSession = useCallback(async () => {
+    try {
+      const sealosSession = await sealosApp.getSession();
+      const sealosToken = sealosSession.token as unknown as string;
+      const sealosArea = extractAreaFromSealosToken(sealosToken ?? "");
+      const sealosNs = sealosSession.user.nsid;
+      const sealosKubeconfig =
+        typeof sealosSession.kubeconfig === "string"
+          ? sealosSession.kubeconfig
+          : null;
+
+      return {
+        sealosToken: sealosToken ?? null,
+        sealosArea,
+        sealosUser: sealosSession.user,
+        sealosNs,
+        sealosKubeconfig,
+      };
+    } catch (error) {
+      console.warn("Refresh sealos session failed:", error);
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     // prevent multiple initialization
@@ -90,6 +128,10 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
         const sealosToken = sealosSession.token as unknown as string;
         const sealosArea = extractAreaFromSealosToken(sealosToken ?? "");
         const sealosNs = sealosSession.user.nsid;
+        const sealosKubeconfig =
+          typeof sealosSession.kubeconfig === "string"
+            ? sealosSession.kubeconfig
+            : null;
 
         window.localStorage.setItem("sealosToken", sealosToken);
         window.localStorage.setItem("sealosArea", sealosArea ?? "");
@@ -106,6 +148,7 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
           sealosArea,
           sealosUser: sealosSession.user,
           sealosNs,
+          sealosKubeconfig,
           currentLanguage: lang.lng,
         });
 
@@ -139,7 +182,9 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
   }, [i18n]);
 
   return (
-    <SealosContext.Provider value={state}>{children}</SealosContext.Provider>
+    <SealosContext.Provider value={{ ...state, refreshSealosSession }}>
+      {children}
+    </SealosContext.Provider>
   );
 }
 
