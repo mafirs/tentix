@@ -280,9 +280,8 @@ export function useTicketWebSocket({
     setIsLoading(true);
 
     // 构建 WebSocket URL
-    const wsOrigin = import.meta.env.DEV
-      ? "ws://localhost:3000"
-      : `wss://${window.location.host}`;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsOrigin = `${protocol}//${window.location.host}`;
     const url = new URL(`/api/chat/ws`, wsOrigin);
     url.searchParams.set("ticketId", ticketId);
     url.searchParams.set("token", token);
