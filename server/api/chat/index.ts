@@ -836,10 +836,12 @@ const chatRouter = factory
                 }
                 case "withdraw_message": {
                   // Withdraw the message
-                  const withdrawnMessage = await withdrawMessage(
-                    parsedMessage.messageId,
-                    userId,
-                  );
+                  const withdrawnMessage = await withdrawMessage({
+                    messageId: parsedMessage.messageId,
+                    ticketId,
+                    operatorId: userId,
+                    operatorRole: role,
+                  });
 
                   if (withdrawnMessage) {
                     let broadcastExclude = [clientId];

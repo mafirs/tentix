@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useThrottleFn } from "ahooks";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   type JSONContentZod,
   type wsMsgServerType,
@@ -12,6 +13,7 @@ import { useToast } from "tentix-ui";
 const WS_HEARTBEAT_INTERVAL = 30000; // 30 seconds
 const WS_RECONNECT_INTERVAL = 3000; // 3 seconds
 const MAX_RECONNECT_ATTEMPTS = 5;
+const WITHDRAW_RECONCILE_DELAY_MS = 1200;
 
 interface UseTicketWebSocketProps {
   ticketId: string | null;
@@ -62,8 +64,11 @@ export function useTicketWebSocket({
       }
     >
   >(new Map());
+  const pendingWithdrawalsRef = useRef<Set<number>>(new Set());
+  const withdrawRevalidateTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const {
     addMessage,
     handleSentMessage,
@@ -72,6 +77,41 @@ export function useTicketWebSocket({
     readMessage,
     setWithdrawMessageFunc,
   } = useChatStore();
+
+  const reconcilePendingWithdrawals = useCallback(() => {
+    if (withdrawRevalidateTimerRef.current) {
+      clearTimeout(withdrawRevalidateTimerRef.current);
+      withdrawRevalidateTimerRef.current = null;
+    }
+
+    if (pendingWithdrawalsRef.current.size === 0 || !ticketId) {
+      return;
+    }
+
+    pendingWithdrawalsRef.current.clear();
+    void queryClient.invalidateQueries({
+      queryKey: ["getTicket", ticketId],
+    });
+  }, [queryClient, ticketId]);
+
+  const scheduleWithdrawRevalidation = useCallback(() => {
+    if (withdrawRevalidateTimerRef.current) {
+      clearTimeout(withdrawRevalidateTimerRef.current);
+    }
+
+    withdrawRevalidateTimerRef.current = setTimeout(() => {
+      withdrawRevalidateTimerRef.current = null;
+
+      if (pendingWithdrawalsRef.current.size === 0 || !ticketId) {
+        return;
+      }
+
+      pendingWithdrawalsRef.current.clear();
+      void queryClient.invalidateQueries({
+        queryKey: ["getTicket", ticketId],
+      });
+    }, WITHDRAW_RECONCILE_DELAY_MS);
+  }, [queryClient, ticketId]);
 
   // ==================== 节流的输入状态发送 ====================
   const { run: sendTypingThrottled } = useThrottleFn(
@@ -146,6 +186,12 @@ export function useTicketWebSocket({
     });
     pendingMessagesRef.current.clear();
 
+    if (withdrawRevalidateTimerRef.current) {
+      clearTimeout(withdrawRevalidateTimerRef.current);
+      withdrawRevalidateTimerRef.current = null;
+    }
+    pendingWithdrawalsRef.current.clear();
+
     // 重置状态
     setIsLoading(false);
   }, [stopHeartbeat]);
@@ -199,6 +245,7 @@ export function useTicketWebSocket({
           }
 
           case "message_withdrawn":
+            pendingWithdrawalsRef.current.delete(data.messageId);
             if (data.roomId === ticketId) {
               updateWithdrawMessage(data.messageId);
             }
@@ -234,6 +281,7 @@ export function useTicketWebSocket({
               variant: "destructive",
             });
             onError?.(data.error);
+            reconcilePendingWithdrawals();
 
             // 特殊错误处理：连接不活跃时触发重连
             if (data.error === "Connection is not alive") {
@@ -246,7 +294,7 @@ export function useTicketWebSocket({
         onError?.(error);
       }
     },
-    [ticketId, userId],
+    [ticketId, userId, addMessage, handleSentMessage, onError, onUserTyping, readMessage, reconcilePendingWithdrawals, toast, updateWithdrawMessage],
   );
 
   // ==================== 重连逻辑 ====================
@@ -310,6 +358,7 @@ export function useTicketWebSocket({
         reject(new Error("连接已断开"));
       });
       pendingMessagesRef.current.clear();
+      reconcilePendingWithdrawals();
 
       attemptReconnect();
     };
@@ -427,23 +476,39 @@ export function useTicketWebSocket({
   // 撤回消息
   const withdrawMessage = useCallback(
     (messageId: number) => {
+      if (!ticketId) {
+        return;
+      }
+
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        toast({
+          title: "WebSocket error",
+          description: "WebSocket 连接未就绪",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      pendingWithdrawalsRef.current.add(messageId);
+
       // 乐观更新
       updateWithdrawMessage(messageId);
 
       // 发送到服务器
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "withdraw_message",
-            userId,
-            messageId,
-            roomId: ticketId,
-            timestamp: Date.now(),
-          }),
-        );
-      }
+      wsRef.current.send(
+        JSON.stringify({
+          type: "withdraw_message",
+          userId,
+          messageId,
+          roomId: ticketId,
+          timestamp: Date.now(),
+        }),
+      );
+
+      // 当前发起撤回的人收不到自己的撤回广播，延迟一次查询对齐最终状态
+      scheduleWithdrawRevalidation();
     },
-    [ticketId, userId, updateWithdrawMessage],
+    [ticketId, userId, scheduleWithdrawRevalidation, toast, updateWithdrawMessage],
   );
 
   // 发送自定义消息
