@@ -14,6 +14,9 @@ const WS_HEARTBEAT_INTERVAL = 30000; // 30 seconds
 const WS_RECONNECT_INTERVAL = 3000; // 3 seconds
 const MAX_RECONNECT_ATTEMPTS = 5;
 const WITHDRAW_RECONCILE_DELAY_MS = 1200;
+const WS_CONNECT_TIMEOUT_MS = 8000;
+const WS_TOKEN_EXPIRED_CLOSE_CODE = 4002;
+const WS_TOKEN_EXPIRED_CLOSE_REASON = "Invalid or expired WebSocket token.";
 
 interface UseTicketWebSocketProps {
   ticketId: string | null;
@@ -52,6 +55,14 @@ export function useTicketWebSocket({
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectCountRef = useRef(0);
+  const connectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const openConnectionPromiseRef = useRef<Promise<WebSocket> | null>(null);
+  const resolveOpenConnectionRef = useRef<((ws: WebSocket) => void) | null>(
+    null,
+  );
+  const rejectOpenConnectionRef = useRef<((error: Error) => void) | null>(
+    null,
+  );
 
   // 业务相关
   const pendingMessagesRef = useRef<
@@ -77,6 +88,60 @@ export function useTicketWebSocket({
     readMessage,
     setWithdrawMessageFunc,
   } = useChatStore();
+
+  const clearOpenConnectionWaiter = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+
+    openConnectionPromiseRef.current = null;
+    resolveOpenConnectionRef.current = null;
+    rejectOpenConnectionRef.current = null;
+  }, []);
+
+  const resolveOpenConnectionWaiter = useCallback(
+    (ws: WebSocket) => {
+      const resolve = resolveOpenConnectionRef.current;
+      clearOpenConnectionWaiter();
+      resolve?.(ws);
+    },
+    [clearOpenConnectionWaiter],
+  );
+
+  const rejectOpenConnectionWaiter = useCallback(
+    (error: Error) => {
+      const reject = rejectOpenConnectionRef.current;
+      clearOpenConnectionWaiter();
+      reject?.(error);
+    },
+    [clearOpenConnectionWaiter],
+  );
+
+  const waitForOpenConnection = useCallback((): Promise<WebSocket> => {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      return Promise.resolve(ws);
+    }
+
+    if (openConnectionPromiseRef.current) {
+      return openConnectionPromiseRef.current;
+    }
+
+    openConnectionPromiseRef.current = new Promise<WebSocket>(
+      (resolve, reject) => {
+        resolveOpenConnectionRef.current = resolve;
+        rejectOpenConnectionRef.current = reject;
+        connectTimeoutRef.current = setTimeout(() => {
+          rejectOpenConnectionWaiter(
+            new Error("WebSocket 连接失败，请检查网络后重试"),
+          );
+        }, WS_CONNECT_TIMEOUT_MS);
+      },
+    );
+
+    return openConnectionPromiseRef.current;
+  }, [rejectOpenConnectionWaiter]);
 
   const reconcilePendingWithdrawals = useCallback(() => {
     if (withdrawRevalidateTimerRef.current) {
@@ -153,7 +218,7 @@ export function useTicketWebSocket({
   }, []);
 
   // ==================== 清理函数 ====================
-  const cleanup = useCallback(() => {
+  const cleanup = useCallback((rejectWaitingConnection = true) => {
     // 停止心跳
     stopHeartbeat();
 
@@ -192,9 +257,13 @@ export function useTicketWebSocket({
     }
     pendingWithdrawalsRef.current.clear();
 
+    if (rejectWaitingConnection) {
+      rejectOpenConnectionWaiter(new Error("连接已关闭"));
+    }
+
     // 重置状态
     setIsLoading(false);
-  }, [stopHeartbeat]);
+  }, [rejectOpenConnectionWaiter, stopHeartbeat]);
 
   // ==================== WebSocket 消息处理 ====================
   const handleWebSocketMessage = useCallback(
@@ -301,6 +370,9 @@ export function useTicketWebSocket({
   const attemptReconnect = useCallback(() => {
     if (reconnectCountRef.current >= MAX_RECONNECT_ATTEMPTS) {
       console.info("达到最大重连次数");
+      rejectOpenConnectionWaiter(
+        new Error("WebSocket 连接失败，请检查网络后重试"),
+      );
       return;
     }
 
@@ -316,14 +388,14 @@ export function useTicketWebSocket({
       reconnectCountRef.current++;
       connectWebSocket();
     }, WS_RECONNECT_INTERVAL);
-  }, []);
+  }, [rejectOpenConnectionWaiter]);
 
   // ==================== 建立 WebSocket 连接 ====================
   const connectWebSocket = useCallback(() => {
     if (!token || !ticketId) return;
 
     // 先清理旧连接
-    cleanup();
+    cleanup(false);
 
     setIsLoading(true);
 
@@ -343,22 +415,35 @@ export function useTicketWebSocket({
       setIsLoading(false);
       reconnectCountRef.current = 0; // 重置重连计数
       startHeartbeat();
+      resolveOpenConnectionWaiter(ws);
     };
 
     // onmessage: 处理消息
     ws.onmessage = handleWebSocketMessage;
 
     // onclose: 连接关闭，尝试重连
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       stopHeartbeat();
+
+      const isTokenExpired =
+        event.code === WS_TOKEN_EXPIRED_CLOSE_CODE ||
+        event.reason === WS_TOKEN_EXPIRED_CLOSE_REASON;
+      const closeError = new Error(
+        isTokenExpired ? "连接已过期，请刷新页面后重试" : "连接已断开",
+      );
 
       // 清理待发送消息
       pendingMessagesRef.current.forEach(({ reject, timeoutId }) => {
         clearTimeout(timeoutId);
-        reject(new Error("连接已断开"));
+        reject(closeError);
       });
       pendingMessagesRef.current.clear();
       reconcilePendingWithdrawals();
+
+      if (isTokenExpired) {
+        rejectOpenConnectionWaiter(closeError);
+        return;
+      }
 
       attemptReconnect();
     };
@@ -370,6 +455,32 @@ export function useTicketWebSocket({
       setIsLoading(false);
     };
   }, [ticketId, token]);
+
+  const ensureConnected = useCallback(async (): Promise<WebSocket> => {
+    if (!ticketId) {
+      throw new Error("ticketId 未设置");
+    }
+
+    if (!token) {
+      throw new Error("WebSocket token 未设置");
+    }
+
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      return ws;
+    }
+
+    if (
+      !ws ||
+      ws.readyState === WebSocket.CLOSING ||
+      ws.readyState === WebSocket.CLOSED
+    ) {
+      reconnectCountRef.current = 0;
+      connectWebSocket();
+    }
+
+    return waitForOpenConnection();
+  }, [connectWebSocket, ticketId, token, waitForOpenConnection]);
 
   // ==================== 初始化连接 ====================
   useEffect(() => {
@@ -391,22 +502,18 @@ export function useTicketWebSocket({
 
   // 发送消息
   const sendMessage = useCallback(
-    (
+    async (
       content: JSONContentZod,
       tempId: number,
       isInternal: boolean = false,
     ): Promise<void> => {
+      if (!ticketId) {
+        throw new Error("ticketId 未设置");
+      }
+
+      const ws = await ensureConnected();
+
       return new Promise((resolve, reject) => {
-        if (!ticketId) {
-          reject(new Error("ticketId 未设置"));
-          return;
-        }
-
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-          reject(new Error("WebSocket 连接未就绪"));
-          return;
-        }
-
         // 设置超时
         const timeoutId = setTimeout(() => {
           pendingMessagesRef.current.delete(tempId);
@@ -430,7 +537,7 @@ export function useTicketWebSocket({
         });
 
         // 发送到服务器
-        wsRef.current.send(
+        ws.send(
           JSON.stringify({
             type: "message",
             content,
@@ -442,7 +549,7 @@ export function useTicketWebSocket({
         );
       });
     },
-    [ticketId, userId, sendNewMessage],
+    [ticketId, userId, sendNewMessage, ensureConnected],
   );
 
   // 发送输入状态
@@ -475,15 +582,19 @@ export function useTicketWebSocket({
 
   // 撤回消息
   const withdrawMessage = useCallback(
-    (messageId: number) => {
+    async (messageId: number) => {
       if (!ticketId) {
         return;
       }
 
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      let ws: WebSocket;
+      try {
+        ws = await ensureConnected();
+      } catch (error) {
         toast({
           title: "WebSocket error",
-          description: "WebSocket 连接未就绪",
+          description:
+            error instanceof Error ? error.message : "WebSocket 连接失败",
           variant: "destructive",
         });
         return;
@@ -495,7 +606,7 @@ export function useTicketWebSocket({
       updateWithdrawMessage(messageId);
 
       // 发送到服务器
-      wsRef.current.send(
+      ws.send(
         JSON.stringify({
           type: "withdraw_message",
           userId,
@@ -508,7 +619,14 @@ export function useTicketWebSocket({
       // 当前发起撤回的人收不到自己的撤回广播，延迟一次查询对齐最终状态
       scheduleWithdrawRevalidation();
     },
-    [ticketId, userId, scheduleWithdrawRevalidation, toast, updateWithdrawMessage],
+    [
+      ticketId,
+      userId,
+      ensureConnected,
+      scheduleWithdrawRevalidation,
+      toast,
+      updateWithdrawMessage,
+    ],
   );
 
   // 发送自定义消息
