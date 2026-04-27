@@ -26,9 +26,23 @@ export async function findAndMarkCustomerReplyPendingTickets(
       SELECT t.id
       FROM tentix.tickets t
       JOIN latest_messages lm ON t.id = lm.ticket_id
+      JOIN tentix.users sender ON sender.id = lm.sender_id
       WHERE t.status = 'in_progress'
         AND lm.sender_id = t.customer_id
+        AND sender.role = 'customer'
         AND lm.created_at <= NOW() - (${safeTimeoutMinutes} * INTERVAL '1 minute')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tentix.ticket_history th
+          WHERE th.ticket_id = t.id
+            AND (
+              th.type IN ('close', 'resolve')
+              OR (
+                th.type = 'update'
+                AND th.description IN ('关闭工单', 'Close ticket', 'Close Ticket')
+              )
+            )
+        )
       FOR UPDATE OF t SKIP LOCKED
     )
     UPDATE tentix.tickets
