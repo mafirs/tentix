@@ -209,6 +209,8 @@ export const translations = {
       auth_failed: "Authentication failed",
       setup_session: "Please wait while we set up your session",
       redirecting_dashboard: "Redirecting to your dashboard...",
+      sealos_auth_not_ready:
+        "Sealos account verification is not complete. Please reopen Work Orders from Sealos.",
 
       // Login/Register page
       login: "Login",
@@ -779,6 +781,8 @@ export const translations = {
       auth_failed: "认证失败",
       setup_session: "请稍候，正在设置您的会话",
       redirecting_dashboard: "正在跳转到您的面板...",
+      sealos_auth_not_ready:
+        "Sealos 账号校验未完成，请从 Sealos 重新打开工单页面",
 
       // Login/Register page
       login: "登录",
