@@ -11,7 +11,7 @@ import {
   logInfo,
 } from "@/utils/index.ts";
 import * as schema from "@db/schema.ts";
-import { eq, and, desc, count, or, like, inArray, gte, lte } from "drizzle-orm";
+import { eq, and, desc, count, or, like, inArray, gte, lte, sql } from "drizzle-orm";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi/zod";
 import { z } from "zod";
@@ -303,7 +303,11 @@ const ticketRouter = factory
             description: "Number of records returned per page (1-100)",
           }),
         keyword: z.string().optional().openapi({
-          description: "Search keyword to match ticket ID or title",
+          description: "Search keyword interpreted by searchMode",
+        }),
+        searchMode: z.enum(["ticket", "user"]).optional().default("ticket").openapi({
+          description:
+            "'ticket' matches ticket ID/title. 'user' matches Sealos user ID.",
         }),
         pending: z
           .string()
@@ -361,6 +365,7 @@ const ticketRouter = factory
         page,
         pageSize,
         keyword,
+        searchMode,
         pending,
         in_progress,
         resolved,
@@ -396,12 +401,37 @@ const ticketRouter = factory
       const conditions = [];
 
       if (keyword && keyword.trim()) {
-        const trimmedKeyword = `%${keyword.trim()}%`;
-        const keywordCondition = or(
-          like(schema.tickets.id, trimmedKeyword),
-          like(schema.tickets.title, trimmedKeyword),
-        );
-        conditions.push(keywordCondition);
+        const trimmedKeyword = keyword.trim();
+        if (searchMode === "user") {
+          const matchedUsers = await db
+            .select({ userId: schema.userIdentities.userId })
+            .from(schema.userIdentities)
+            .where(
+              and(
+                eq(schema.userIdentities.provider, "sealos"),
+                eq(schema.userIdentities.providerUserId, trimmedKeyword),
+              ),
+            );
+
+          if (matchedUsers.length === 0) {
+            // 用户搜索模式下找不到 Sealos ID 时必须返回空，不能回退到工单搜索。
+            conditions.push(sql`false`);
+          } else {
+            conditions.push(
+              inArray(
+                schema.tickets.customerId,
+                matchedUsers.map((user) => user.userId),
+              ),
+            );
+          }
+        } else {
+          const keywordPattern = `%${trimmedKeyword}%`;
+          const keywordCondition = or(
+            like(schema.tickets.id, keywordPattern),
+            like(schema.tickets.title, keywordPattern),
+          );
+          conditions.push(keywordCondition);
+        }
       }
 
       if (selectedStatuses.length > 0) {

@@ -34,6 +34,8 @@ const basicUserCols = {
   },
 } as const;
 
+type SearchMode = "ticket" | "user";
+
 // 根据已读/未读状态筛选工单ID的辅助函数（用于员工工单）
 // 未读：没有任何一个员工已读，且最后一条消息不是员工发送的
 // 已读：有至少一个员工已读，或者最后一条消息是员工发送的
@@ -182,22 +184,49 @@ async function getFilteredTicketIdsByReadStatus(
 }
 
 // 🔍 构建搜索条件的辅助函数
-function buildSearchConditions(
+async function buildSearchConditions(
   keyword?: string,
   statuses?: TicketStatus[],
   createdAt_start?: string,
   createdAt_end?: string,
   module?: string,
+  searchMode: SearchMode = "ticket",
 ) {
   const conditions = [];
 
   if (keyword && keyword.trim()) {
-    const trimmedKeyword = `%${keyword.trim()}%`;
-    const keywordCondition = or(
-      like(schema.tickets.id, trimmedKeyword),
-      like(schema.tickets.title, trimmedKeyword),
-    );
-    conditions.push(keywordCondition);
+    const trimmedKeyword = keyword.trim();
+    if (searchMode === "user") {
+      const db = connectDB();
+      const matchedUsers = await db
+        .select({ userId: schema.userIdentities.userId })
+        .from(schema.userIdentities)
+        .where(
+          and(
+            eq(schema.userIdentities.provider, "sealos"),
+            eq(schema.userIdentities.providerUserId, trimmedKeyword),
+          ),
+        );
+
+      if (matchedUsers.length === 0) {
+        // 用户搜索模式下找不到 Sealos ID 时必须返回空，不能回退到工单搜索。
+        conditions.push(sql`false`);
+      } else {
+        conditions.push(
+          inArray(
+            schema.tickets.customerId,
+            matchedUsers.map((user) => user.userId),
+          ),
+        );
+      }
+    } else {
+      const keywordPattern = `%${trimmedKeyword}%`;
+      const keywordCondition = or(
+        like(schema.tickets.id, keywordPattern),
+        like(schema.tickets.title, keywordPattern),
+      );
+      conditions.push(keywordCondition);
+    }
   }
 
   if (statuses && statuses.length > 0) {
@@ -230,17 +259,19 @@ async function getTicketsWithPagination(
   createdAt_start?: string,
   createdAt_end?: string,
   module?: string,
+  searchMode: SearchMode = "ticket",
 ) {
   const db = connectDB();
   const offset = (page - 1) * pageSize;
 
   // 构建搜索条件
-  const searchConditions = buildSearchConditions(
+  const searchConditions = await buildSearchConditions(
     keyword,
     status,
     createdAt_start,
     createdAt_end,
     module,
+    searchMode,
   );
 
   // 【新增】如果提供了 readStatus，则首先获取符合条件的工单ID
@@ -413,16 +444,18 @@ async function getTicketsForAgent(
   createdAt_start?: string,
   createdAt_end?: string,
   module?: string,
+  searchMode: SearchMode = "ticket",
 ) {
   const db = connectDB();
 
   // 构建搜索条件
-  const searchConditions = buildSearchConditions(
+  const searchConditions = await buildSearchConditions(
     keyword,
     status,
     createdAt_start,
     createdAt_end,
     module,
+    searchMode,
   );
 
   // 【新增】如果提供了 readStatus，则首先获取符合条件的工单ID
@@ -634,6 +667,7 @@ async function getAllTickets(
   createdAt_start?: string,
   createdAt_end?: string,
   module?: string,
+  searchMode: SearchMode = "ticket",
 ) {
   const db = connectDB();
   const offset = (page - 1) * pageSize;
@@ -648,12 +682,13 @@ async function getAllTickets(
   } as const;
 
   // 构建搜索条件
-  const searchConditions = buildSearchConditions(
+  const searchConditions = await buildSearchConditions(
     keyword,
     status,
     createdAt_start,
     createdAt_end,
     module,
+    searchMode,
   );
 
   // 【新增】如果提供了 readStatus，则按照新逻辑过滤：检查是否有任意 agent 或 technician 读过最新消息
@@ -864,7 +899,11 @@ const ticketsRouter = new Hono<AuthEnv>().get(
           description: "Number of records returned per page (1-100)",
         }),
       keyword: z.string().optional().openapi({
-        description: "Search keyword to match ticket ID or title",
+        description: "Search keyword interpreted by searchMode",
+      }),
+      searchMode: z.enum(["ticket", "user"]).optional().default("ticket").openapi({
+        description:
+          "'ticket' matches ticket ID/title. 'user' matches Sealos user ID.",
       }),
       readStatus: z.enum(["read", "unread"]).optional().openapi({
         description:
@@ -933,6 +972,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
       page,
       pageSize,
       keyword,
+      searchMode,
       readStatus,
       pending,
       in_progress,
@@ -969,6 +1009,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
           createdAt_start,
           createdAt_end,
           module,
+          searchMode,
         ),
         // 获取全局统计
         (async () => {
@@ -1000,6 +1041,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_start,
                 createdAt_end,
                 module,
+                searchMode,
               );
             case "admin":
             case "technician":
@@ -1014,6 +1056,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_start,
                 createdAt_end,
                 module,
+                searchMode,
               );
             default: // customer
               return getTicketsWithPagination(
@@ -1027,6 +1070,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_start,
                 createdAt_end,
                 module,
+                searchMode,
               );
           }
         })(),

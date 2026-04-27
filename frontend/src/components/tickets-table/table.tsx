@@ -7,7 +7,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { joinTrans, useTranslation } from "i18n";
+import { useTranslation } from "i18n";
 import { useTicketModules, getModuleTranslation } from "@store/app-config";
 import {
   Loader2Icon,
@@ -16,6 +16,7 @@ import {
   ChevronRightIcon,
   ChevronsLeftIcon,
   ChevronsRightIcon,
+  ChevronDownIcon,
 } from "lucide-react";
 import * as React from "react";
 import { useMemo, useState } from "react";
@@ -30,6 +31,10 @@ import {
   DoneIcon,
   Badge,
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   PriorityBadge,
   StatusBadge,
   Input,
@@ -46,15 +51,21 @@ export function DataTable({ initialData }: PaginatedTableProps) {
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const ticketModules = useTicketModules();
+  const searchTicketsPlaceholder =
+    i18n.language === "zh"
+      ? `${t("search")}${t("tkt_other")}`
+      : `${t("search")} ${t("tkt_other")}`;
 
   // 使用 zustand store 管理分页状态
   const {
     currentPage,
     pageSize,
     searchQuery,
+    searchMode,
     statuses,
     setCurrentPage,
     setSearchQuery,
+    setSearchMode,
     setStatuses,
   } = allTicketsTablePagination();
 
@@ -78,6 +89,16 @@ export function DataTable({ initialData }: PaginatedTableProps) {
   };
 
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
+  const effectiveSearchQuery = searchQuery.trim() ? debouncedSearchQuery : "";
+  const requestSearchMode = effectiveSearchQuery.trim() ? searchMode : "ticket";
+  const handleSearchModeChange = (mode: "ticket" | "user") => {
+    if (mode === searchMode) {
+      return;
+    }
+
+    setSearchMode(mode);
+  };
+
   const [isSmallScreen, setIsSmallScreen] = useState(
     typeof window !== "undefined" ? window.innerWidth < 1316 : false,
   );
@@ -99,14 +120,15 @@ export function DataTable({ initialData }: PaginatedTableProps) {
     ...allTicketsQueryOptions(
       pageSize,
       currentPage,
-      debouncedSearchQuery,
+      effectiveSearchQuery,
       statuses,
+      requestSearchMode,
     ),
     initialData:
       initialData &&
       currentPage === 1 &&
       statuses.length === 0 &&
-      !debouncedSearchQuery
+      !effectiveSearchQuery
         ? initialData
         : undefined,
   });
@@ -302,6 +324,9 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       })
       .join(" ");
 
+    const isSealosUserSearchEmpty =
+      requestSearchMode === "user" && Boolean(effectiveSearchQuery.trim());
+
     return (
       <div className="flex-1 min-h-0 flex flex-col px-4 lg:px-6  gap-3">
         {/* Table Header - Fixed */}
@@ -404,12 +429,16 @@ export function DataTable({ initialData }: PaginatedTableProps) {
               >
                 <div className="flex flex-col items-center justify-center text-center">
                   <p className="text-black text-2xl font-medium leading-8 mb-1">
-                    {t("no_tickets_found")}
+                    {isSealosUserSearchEmpty
+                      ? t("no_tickets_found_for_sealos_user")
+                      : t("no_tickets_found")}
                   </p>
                   <div className="flex flex-col items-center justify-center text-center">
-                    <p className="text-gray-600 text-base font-normal leading-6">
-                      {t("no_tickets_received")}
-                    </p>
+                    {!isSealosUserSearchEmpty && (
+                      <p className="text-gray-600 text-base font-normal leading-6">
+                        {t("no_tickets_received")}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -638,14 +667,39 @@ export function DataTable({ initialData }: PaginatedTableProps) {
 
         {/* search */}
         <div className="flex items-center gap-3">
-          <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={joinTrans([t("search"), t("tkt_other")])}
-              className="pl-10 pr-3 text-sm leading-none h-10 rounded-lg"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
+          <div className="flex h-10 overflow-hidden rounded-lg border border-zinc-200 bg-white">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="h-full min-w-[112px] rounded-none border-r border-zinc-200 px-3 text-sm font-normal"
+                >
+                  <span>{searchMode === "ticket" ? t("tkt_one") : "Sealos ID"}</span>
+                  <ChevronDownIcon className="ml-1 h-4 w-4 text-zinc-500" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-40">
+                <DropdownMenuItem onClick={() => handleSearchModeChange("ticket")}>
+                  {t("tkt_one")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleSearchModeChange("user")}>
+                  Sealos ID
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <div className="relative">
+              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder={
+                  searchMode === "user"
+                    ? "Sealos ID"
+                    : searchTicketsPlaceholder
+                }
+                className="h-full w-56 rounded-none border-0 pl-10 pr-3 text-sm leading-none focus-visible:ring-0"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
           </div>
         </div>
       </div>

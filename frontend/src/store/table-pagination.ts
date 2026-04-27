@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+type SearchMode = "ticket" | "user";
+
 interface UserTicketsTablePaginationState {
   // 当前页
   currentPage: number;
@@ -7,6 +9,8 @@ interface UserTicketsTablePaginationState {
   pageSize: number;
   // 搜索关键词
   searchQuery: string;
+  // 搜索模式
+  searchMode: SearchMode;
   // 选中的状态数组
   statuses: string[];
 
@@ -22,6 +26,7 @@ interface UserTicketsTablePaginationState {
   setCurrentPage: (page: number) => void;
   setPageSize: (size: number) => void;
   setSearchQuery: (query: string) => void;
+  setSearchMode: (mode: SearchMode) => void;
   setReadStatus: (readStatus: "read" | "unread" | "all") => void;
   setAllTicket: (allTicket: boolean) => void;
   setStatuses: (statuses: string[]) => void;
@@ -54,6 +59,8 @@ interface AllTicketsTablePaginationState {
   pageSize: number;
   // 搜索关键词
   searchQuery: string;
+  // 搜索模式
+  searchMode: SearchMode;
   // 选中的状态数组
   statuses: string[];
 
@@ -64,6 +71,7 @@ interface AllTicketsTablePaginationState {
   setCurrentPage: (page: number) => void;
   setPageSize: (size: number) => void;
   setSearchQuery: (query: string) => void;
+  setSearchMode: (mode: SearchMode) => void;
   setStatuses: (statuses: string[]) => void;
   setStatusFilter: (
     status: "all" | "pending" | "in_progress" | "resolved" | "scheduled",
@@ -89,6 +97,7 @@ export const userTablePagination = create<UserTicketsTablePaginationState>(
     currentPage: 1,
     pageSize: 10,
     searchQuery: "",
+    searchMode: "ticket",
     statuses: [], // 空数组表示显示所有状态
     isInitialized: false,
     allTicket: true,
@@ -105,6 +114,13 @@ export const userTablePagination = create<UserTicketsTablePaginationState>(
       set({
         searchQuery: query,
         currentPage: 1, // 搜索时重置到第一页
+      }),
+
+    setSearchMode: (searchMode: SearchMode) =>
+      set({
+        searchMode,
+        searchQuery: "",
+        currentPage: 1,
       }),
 
     setAllTicket: (allTicket: boolean) => set({ allTicket, currentPage: 1 }),
@@ -143,6 +159,7 @@ export const userTablePagination = create<UserTicketsTablePaginationState>(
         currentPage: 1,
         pageSize: 10,
         searchQuery: "",
+        searchMode: "ticket",
         statuses: [],
         // 注意：重置时不重置 isInitialized，保持初始化状态
       }),
@@ -175,6 +192,7 @@ export const allTicketsTablePagination = create<AllTicketsTablePaginationState>(
     currentPage: 1,
     pageSize: 10,
     searchQuery: "",
+    searchMode: "ticket",
     statuses: [], // 空数组表示显示所有状态
     isInitialized: false,
 
@@ -190,6 +208,13 @@ export const allTicketsTablePagination = create<AllTicketsTablePaginationState>(
       set({
         searchQuery: query,
         currentPage: 1, // 搜索时重置到第一页
+      }),
+
+    setSearchMode: (searchMode: SearchMode) =>
+      set({
+        searchMode,
+        searchQuery: "",
+        currentPage: 1,
       }),
 
     setStatuses: (statuses: string[]) =>
@@ -223,6 +248,7 @@ export const allTicketsTablePagination = create<AllTicketsTablePaginationState>(
         currentPage: 1,
         pageSize: 10,
         searchQuery: "",
+        searchMode: "ticket",
         statuses: [],
         // 注意：重置时不重置 isInitialized，保持初始化状态
       }),

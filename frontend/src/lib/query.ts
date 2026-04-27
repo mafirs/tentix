@@ -45,6 +45,7 @@ export const userTicketsQueryOptions = (
   readStatus?: "read" | "unread" | "all",
   allTicket?: boolean,
   id?: string,
+  searchMode: "ticket" | "user" = "ticket",
 ) =>
   queryOptions({
     queryKey: [
@@ -56,6 +57,7 @@ export const userTicketsQueryOptions = (
       readStatus,
       allTicket,
       id,
+      searchMode,
     ],
     queryFn: async () => {
       const params: Record<string, string | boolean> = {
@@ -84,6 +86,8 @@ export const userTicketsQueryOptions = (
         params.keyword = keyword.trim();
       }
 
+      params.searchMode = searchMode;
+
       if (allTicket) {
         params.allTicket = allTicket;
       }
@@ -107,9 +111,10 @@ export const allTicketsQueryOptions = (
   page = 1,
   keyword?: string,
   statuses?: string[],
+  searchMode: "ticket" | "user" = "ticket",
 ) =>
   queryOptions({
-    queryKey: ["getAllTickets", pageSize, page, statuses, keyword],
+    queryKey: ["getAllTickets", pageSize, page, statuses, keyword, searchMode],
     queryFn: async () => {
       const params: Record<string, string> = {
         pageSize: pageSize.toString(),
@@ -136,6 +141,8 @@ export const allTicketsQueryOptions = (
       if (keyword && keyword.trim()) {
         params.keyword = keyword.trim();
       }
+
+      params.searchMode = searchMode;
 
       const data = await apiClient.ticket.all
         .$get({ query: params })
