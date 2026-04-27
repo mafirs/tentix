@@ -15,6 +15,16 @@ type ErrorMessage = {
   stack: string;
 };
 
+type TicketSortBy = "createdAt" | "updatedAt";
+type TicketSortOrder = "asc" | "desc";
+
+type TicketListQueryOptions = {
+  sortBy?: TicketSortBy | null;
+  sortOrder?: TicketSortOrder;
+  area?: string | null;
+  module?: string | null;
+};
+
 // 全局声明
 declare module "@tanstack/react-query" {
   interface Register {
@@ -46,6 +56,7 @@ export const userTicketsQueryOptions = (
   allTicket?: boolean,
   id?: string,
   searchMode: "ticket" | "user" = "ticket",
+  options: TicketListQueryOptions = {},
 ) =>
   queryOptions({
     queryKey: [
@@ -58,6 +69,10 @@ export const userTicketsQueryOptions = (
       allTicket,
       id,
       searchMode,
+      options.sortBy ?? null,
+      options.sortOrder ?? "desc",
+      options.area ?? null,
+      options.module ?? null,
     ],
     queryFn: async () => {
       const params: Record<string, string | boolean> = {
@@ -96,6 +111,19 @@ export const userTicketsQueryOptions = (
         params.readStatus = readStatus;
       }
 
+      if (options.sortBy) {
+        params.sortBy = options.sortBy;
+        params.sortOrder = options.sortOrder ?? "desc";
+      }
+
+      if (options.area) {
+        params.area = options.area;
+      }
+
+      if (options.module) {
+        params.module = options.module;
+      }
+
       const data = await apiClient.user.getTickets
         .$get({ query: params })
         .then((r) => r.json());
@@ -112,9 +140,21 @@ export const allTicketsQueryOptions = (
   keyword?: string,
   statuses?: string[],
   searchMode: "ticket" | "user" = "ticket",
+  options: TicketListQueryOptions = {},
 ) =>
   queryOptions({
-    queryKey: ["getAllTickets", pageSize, page, statuses, keyword, searchMode],
+    queryKey: [
+      "getAllTickets",
+      pageSize,
+      page,
+      statuses,
+      keyword,
+      searchMode,
+      options.sortBy ?? null,
+      options.sortOrder ?? "desc",
+      options.area ?? null,
+      options.module ?? null,
+    ],
     queryFn: async () => {
       const params: Record<string, string> = {
         pageSize: pageSize.toString(),
@@ -143,6 +183,19 @@ export const allTicketsQueryOptions = (
       }
 
       params.searchMode = searchMode;
+
+      if (options.sortBy) {
+        params.sortBy = options.sortBy;
+        params.sortOrder = options.sortOrder ?? "desc";
+      }
+
+      if (options.area) {
+        params.area = options.area;
+      }
+
+      if (options.module) {
+        params.module = options.module;
+      }
 
       const data = await apiClient.ticket.all
         .$get({ query: params })

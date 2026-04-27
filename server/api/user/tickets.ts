@@ -2,6 +2,7 @@ import { connectDB, getAbbreviatedText } from "@/utils/index.ts";
 import * as schema from "@db/schema.ts";
 import {
   and,
+  asc,
   desc,
   eq,
   sql,
@@ -22,7 +23,7 @@ import "zod-openapi/extend";
 import { Hono } from "hono";
 import type { AuthEnv } from "../middleware.ts";
 
-import { TicketStatus } from "@/utils/const.ts";
+import { areaEnumArray, TicketStatus } from "@/utils/const.ts";
 import { userTicketSchema } from "@/utils/types.ts";
 
 const basicUserCols = {
@@ -35,6 +36,19 @@ const basicUserCols = {
 } as const;
 
 type SearchMode = "ticket" | "user";
+type TicketSortBy = "createdAt" | "updatedAt";
+type TicketSortOrder = "asc" | "desc";
+
+function getTicketSortOrder(
+  sortBy: TicketSortBy,
+  sortOrder: TicketSortOrder,
+) {
+  const order = sortOrder === "asc" ? asc : desc;
+  const column =
+    sortBy === "createdAt" ? schema.tickets.createdAt : schema.tickets.updatedAt;
+
+  return [order(column), order(schema.tickets.id)];
+}
 
 // 根据已读/未读状态筛选工单ID的辅助函数（用于员工工单）
 // 未读：没有任何一个员工已读，且最后一条消息不是员工发送的
@@ -190,6 +204,7 @@ async function buildSearchConditions(
   createdAt_start?: string,
   createdAt_end?: string,
   module?: string,
+  area?: string,
   searchMode: SearchMode = "ticket",
 ) {
   const conditions = [];
@@ -244,6 +259,10 @@ async function buildSearchConditions(
     conditions.push(eq(schema.tickets.module, module));
   }
 
+  if (area) {
+    conditions.push(eq(schema.tickets.area, area));
+  }
+
   return conditions;
 }
 
@@ -260,6 +279,9 @@ async function getTicketsWithPagination(
   createdAt_end?: string,
   module?: string,
   searchMode: SearchMode = "ticket",
+  area?: string,
+  sortBy?: TicketSortBy,
+  sortOrder: TicketSortOrder = "desc",
 ) {
   const db = connectDB();
   const offset = (page - 1) * pageSize;
@@ -271,8 +293,12 @@ async function getTicketsWithPagination(
     createdAt_start,
     createdAt_end,
     module,
+    area,
     searchMode,
   );
+  const orderBy = sortBy
+    ? getTicketSortOrder(sortBy, sortOrder)
+    : [desc(schema.tickets.updatedAt), desc(schema.tickets.id)];
 
   // 【新增】如果提供了 readStatus，则首先获取符合条件的工单ID
   if (readStatus) {
@@ -312,7 +338,7 @@ async function getTicketsWithPagination(
     // 获取当前页数据
     const tickets = await db.query.tickets.findMany({
       where: whereConditions,
-      orderBy: [desc(schema.tickets.updatedAt), desc(schema.tickets.id)],
+      orderBy,
       limit: pageSize,
       offset,
       with: {
@@ -380,7 +406,7 @@ async function getTicketsWithPagination(
         eq(schema.techniciansToTickets.ticketId, schema.tickets.id),
       )
       .where(allConditions)
-      .orderBy(desc(schema.tickets.updatedAt), desc(schema.tickets.id))
+      .orderBy(...orderBy)
       .limit(pageSize)
       .offset(offset);
 
@@ -397,7 +423,7 @@ async function getTicketsWithPagination(
     const ticketIds = ticketsData.map((t) => t.ticketId);
     const tickets = await db.query.tickets.findMany({
       where: inArray(schema.tickets.id, ticketIds),
-      orderBy: [desc(schema.tickets.updatedAt), desc(schema.tickets.id)],
+      orderBy,
       with: {
         agent: basicUserCols,
         customer: basicUserCols,
@@ -445,6 +471,9 @@ async function getTicketsForAgent(
   createdAt_end?: string,
   module?: string,
   searchMode: SearchMode = "ticket",
+  area?: string,
+  sortBy?: TicketSortBy,
+  sortOrder: TicketSortOrder = "desc",
 ) {
   const db = connectDB();
 
@@ -455,6 +484,7 @@ async function getTicketsForAgent(
     createdAt_start,
     createdAt_end,
     module,
+    area,
     searchMode,
   );
 
@@ -526,6 +556,90 @@ async function getTicketsForAgent(
     searchConditions.length > 0
       ? and(eq(schema.tickets.agentId, userId), ...searchConditions)
       : eq(schema.tickets.agentId, userId);
+
+  if (sortBy) {
+    const sortField = sortBy === "createdAt" ? "createdAt" : "updatedAt";
+    const sortDirection = sortOrder === "asc" ? 1 : -1;
+    const globalOffset = (page - 1) * pageSize;
+    const pageEnd = globalOffset + pageSize;
+    const technicianTicketRefs = await db
+      .select({
+        ticketId: schema.techniciansToTickets.ticketId,
+        id: schema.tickets.id,
+        createdAt: schema.tickets.createdAt,
+        updatedAt: schema.tickets.updatedAt,
+      })
+      .from(schema.techniciansToTickets)
+      .innerJoin(
+        schema.tickets,
+        eq(schema.techniciansToTickets.ticketId, schema.tickets.id),
+      )
+      .where(technicianAllConditions);
+    const agentTicketRefs = await db.query.tickets.findMany({
+      where: agentAllConditions,
+      columns: {
+        id: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    const ticketRefs = [
+      ...technicianTicketRefs,
+      ...agentTicketRefs.map((ticket) => ({
+        ticketId: ticket.id,
+        id: ticket.id,
+        createdAt: ticket.createdAt,
+        updatedAt: ticket.updatedAt,
+      })),
+    ];
+    const sortedRefs = ticketRefs.sort((a, b) => {
+      const timeCompare =
+        (new Date(a[sortField]).getTime() - new Date(b[sortField]).getTime()) *
+        sortDirection;
+      if (timeCompare !== 0) return timeCompare;
+      return a.id.localeCompare(b.id) * sortDirection;
+    });
+    const pageTicketRefs = sortedRefs.slice(globalOffset, pageEnd);
+    const pageTicketIds = pageTicketRefs.map((ticket) => ticket.ticketId);
+    const pageTickets =
+      pageTicketIds.length > 0
+        ? await db.query.tickets.findMany({
+            where: inArray(schema.tickets.id, pageTicketIds),
+            with: {
+              agent: basicUserCols,
+              customer: basicUserCols,
+              messages: {
+                orderBy: [desc(schema.chatMessages.createdAt)],
+                limit: 1,
+                with: {
+                  readStatus: true,
+                },
+              },
+            },
+          })
+        : [];
+    const orderedTickets = pageTicketRefs
+      .map((ticketRef) =>
+        pageTickets.find((ticket) => ticket.id === ticketRef.ticketId),
+      )
+      .filter(
+        (ticket): ticket is NonNullable<typeof ticket> =>
+          ticket !== undefined,
+      );
+
+    return {
+      tickets: orderedTickets.map((ticket) => ({
+        ...ticket,
+        messages: ticket.messages.map((message) => ({
+          ...message,
+          content: getAbbreviatedText(message.content, 100),
+        })),
+      })),
+      totalCount,
+      totalPages,
+      currentPage: page,
+    };
+  }
 
   // 2. 计算当前页的数据来源和偏移量
   const globalOffset = (page - 1) * pageSize;
@@ -668,6 +782,9 @@ async function getAllTickets(
   createdAt_end?: string,
   module?: string,
   searchMode: SearchMode = "ticket",
+  area?: string,
+  sortBy?: TicketSortBy,
+  sortOrder: TicketSortOrder = "desc",
 ) {
   const db = connectDB();
   const offset = (page - 1) * pageSize;
@@ -688,8 +805,12 @@ async function getAllTickets(
     createdAt_start,
     createdAt_end,
     module,
+    area,
     searchMode,
   );
+  const orderBy = sortBy
+    ? getTicketSortOrder(sortBy, sortOrder)
+    : [desc(schema.tickets.updatedAt), desc(schema.tickets.id)];
 
   // 【新增】如果提供了 readStatus，则按照新逻辑过滤：检查是否有任意 agent 或 technician 读过最新消息
   if (readStatus) {
@@ -717,7 +838,7 @@ async function getAllTickets(
 
     db.query.tickets.findMany({
       where: whereConditions,
-      orderBy: [desc(schema.tickets.updatedAt), desc(schema.tickets.id)],
+      orderBy,
       limit: pageSize,
       offset,
       with: {
@@ -956,6 +1077,15 @@ const ticketsRouter = new Hono<AuthEnv>().get(
       module: z.string().optional().openapi({
         description: "Filter tickets by module",
       }),
+      area: z.enum(areaEnumArray).optional().openapi({
+        description: "Filter tickets by area",
+      }),
+      sortBy: z.enum(["createdAt", "updatedAt"]).optional().openapi({
+        description: "Sort tickets by createdAt or updatedAt",
+      }),
+      sortOrder: z.enum(["asc", "desc"]).optional().default("desc").openapi({
+        description: "Sort order. desc means newest first.",
+      }),
       allTicket: z
         .string()
         .optional()
@@ -981,6 +1111,9 @@ const ticketsRouter = new Hono<AuthEnv>().get(
       createdAt_start,
       createdAt_end,
       module,
+      area,
+      sortBy,
+      sortOrder,
       allTicket,
     } = c.req.valid("query");
 
@@ -1010,6 +1143,9 @@ const ticketsRouter = new Hono<AuthEnv>().get(
           createdAt_end,
           module,
           searchMode,
+          area,
+          sortBy,
+          sortOrder,
         ),
         // 获取全局统计
         (async () => {
@@ -1042,6 +1178,9 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_end,
                 module,
                 searchMode,
+                area,
+                sortBy,
+                sortOrder,
               );
             case "admin":
             case "technician":
@@ -1057,6 +1196,9 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_end,
                 module,
                 searchMode,
+                area,
+                sortBy,
+                sortOrder,
               );
             default: // customer
               return getTicketsWithPagination(
@@ -1071,6 +1213,9 @@ const ticketsRouter = new Hono<AuthEnv>().get(
                 createdAt_end,
                 module,
                 searchMode,
+                area,
+                sortBy,
+                sortOrder,
               );
           }
         })(),

@@ -12,6 +12,8 @@ import { useTicketModules, getModuleTranslation } from "@store/app-config";
 import {
   Loader2Icon,
   SearchIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronsLeftIcon,
@@ -24,6 +26,7 @@ import {
   type GetAllTicketsResponseType,
   type TicketsAllListItemType,
 } from "tentix-server/rpc";
+import { areaEnumArray } from "tentix-server/constants";
 import {
   LayersIcon,
   PendingIcon,
@@ -63,10 +66,17 @@ export function DataTable({ initialData }: PaginatedTableProps) {
     searchQuery,
     searchMode,
     statuses,
+    sortBy,
+    sortOrder,
+    areaFilter,
+    moduleFilter,
     setCurrentPage,
     setSearchQuery,
     setSearchMode,
     setStatuses,
+    setSorting,
+    setAreaFilter,
+    setModuleFilter,
   } = allTicketsTablePagination();
 
   const handleStatusToggle = (
@@ -123,12 +133,21 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       effectiveSearchQuery,
       statuses,
       requestSearchMode,
+      {
+        sortBy,
+        sortOrder,
+        area: areaFilter,
+        module: moduleFilter,
+      },
     ),
     initialData:
       initialData &&
       currentPage === 1 &&
       statuses.length === 0 &&
-      !effectiveSearchQuery
+      !effectiveSearchQuery &&
+      !sortBy &&
+      !areaFilter &&
+      !moduleFilter
         ? initialData
         : undefined,
   });
@@ -184,6 +203,111 @@ export function DataTable({ initialData }: PaginatedTableProps) {
   }, [isSmallScreen]);
 
   const columns = React.useMemo<ColumnDef<TicketsAllListItemType>[]>(() => {
+    const currentLang = i18n.language === "zh" ? "zh-CN" : "en-US";
+    const newestFirstText = i18n.language === "zh" ? "最新优先" : "Newest first";
+    const oldestFirstText = i18n.language === "zh" ? "最旧优先" : "Oldest first";
+    const defaultSortText = i18n.language === "zh" ? "默认排序" : "Default sort";
+    const allText = t("all");
+    const handleSort = (field: "createdAt" | "updatedAt") => {
+      if (sortBy !== field) {
+        setSorting(field, "desc");
+        return;
+      }
+      if (sortOrder === "desc") {
+        setSorting(field, "asc");
+        return;
+      }
+      setSorting(null);
+    };
+    const renderSortableHeader = (
+      field: "createdAt" | "updatedAt",
+      label: string,
+    ) => {
+      const isActive = sortBy === field;
+      const activeText =
+        !isActive
+          ? defaultSortText
+          : sortOrder === "asc"
+            ? oldestFirstText
+            : newestFirstText;
+      return (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-left"
+          title={`${label}: ${activeText}`}
+          onClick={() => handleSort(field)}
+        >
+          <span>{label}</span>
+          <span className="inline-flex flex-col leading-none">
+            <ArrowUpIcon
+              className={`h-3 w-3 ${
+                isActive && sortOrder === "asc" ? "text-blue-600" : "text-zinc-300"
+              }`}
+            />
+            <ArrowDownIcon
+              className={`h-3 w-3 -mt-1 ${
+                isActive && sortOrder === "desc" ? "text-blue-600" : "text-zinc-300"
+              }`}
+            />
+          </span>
+        </button>
+      );
+    };
+    const renderAreaHeader = () => (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-left"
+            title={areaFilter ? `${t("area")}: ${areaFilter}` : `${t("area")}: ${allText}`}
+          >
+            <span>{t("area")}</span>
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 ${areaFilter ? "text-zinc-900" : "text-zinc-400"}`}
+            />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-32">
+          <DropdownMenuItem onClick={() => setAreaFilter(null)}>
+            {allText}
+          </DropdownMenuItem>
+          {areaEnumArray.filter((area) => area !== "test").map((area) => (
+            <DropdownMenuItem key={area} onClick={() => setAreaFilter(area)}>
+              {area}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+    const renderModuleHeader = () => (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-left"
+            title={moduleFilter ? `${t("module")}: ${getModuleTranslation(moduleFilter, currentLang, ticketModules)}` : `${t("module")}: ${allText}`}
+          >
+            <span>{t("module")}</span>
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 ${moduleFilter ? "text-zinc-900" : "text-zinc-400"}`}
+            />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-44">
+          <DropdownMenuItem onClick={() => setModuleFilter(null)}>
+            {allText}
+          </DropdownMenuItem>
+          {ticketModules.map((module) => (
+            <DropdownMenuItem
+              key={module.code}
+              onClick={() => setModuleFilter(module.code)}
+            >
+              {getModuleTranslation(module.code, currentLang, ticketModules)}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
     const baseColumns: ColumnDef<TicketsAllListItemType>[] = [
       {
         accessorKey: "title",
@@ -215,7 +339,7 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       },
       {
         accessorKey: "submittedDate",
-        header: t("created_at"),
+        header: () => renderSortableHeader("createdAt", t("created_at")),
         cell: ({ row }) => {
           const date = new Date(row.original.createdAt);
           return (
@@ -233,7 +357,7 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       },
       {
         accessorKey: "updatedDate",
-        header: t("updated_at"),
+        header: () => renderSortableHeader("updatedAt", t("updated_at")),
         cell: ({ row }) => {
           const date = new Date(row.original.updatedAt);
           return (
@@ -251,7 +375,7 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       },
       {
         accessorKey: "area",
-        header: t("area"),
+        header: () => renderAreaHeader(),
         cell: ({ row }) => (
           <p className="text-zinc-600 text-sm font-normal leading-normal">
             {row.original.area}
@@ -260,10 +384,9 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       },
       {
         accessorKey: "module",
-        header: t("module"),
+        header: () => renderModuleHeader(),
         cell: ({ row }) => {
           const moduleCode = row.original.module;
-          const currentLang = i18n.language === "zh" ? "zh-CN" : "en-US";
           const moduleText = getModuleTranslation(moduleCode, currentLang, ticketModules);
 
           return (
@@ -284,7 +407,19 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       },
     ];
     return baseColumns;
-  }, [t, i18n.language, ticketModules, isSmallScreen]);
+  }, [
+    t,
+    i18n.language,
+    ticketModules,
+    isSmallScreen,
+    sortBy,
+    sortOrder,
+    areaFilter,
+    moduleFilter,
+    setSorting,
+    setAreaFilter,
+    setModuleFilter,
+  ]);
 
   const table = useReactTable({
     data: tickets,
@@ -325,12 +460,15 @@ export function DataTable({ initialData }: PaginatedTableProps) {
       .join(" ");
 
     const isSealosUserSearchEmpty =
-      requestSearchMode === "user" && Boolean(effectiveSearchQuery.trim());
+      requestSearchMode === "user" &&
+      !areaFilter &&
+      !moduleFilter &&
+      Boolean(effectiveSearchQuery.trim());
 
     return (
       <div className="flex-1 min-h-0 flex flex-col px-4 lg:px-6  gap-3">
         {/* Table Header - Fixed */}
-        {(rows.length > 0 || isLoading) && (
+        {(rows.length > 0 || isLoading || sortBy || areaFilter || moduleFilter) && (
           <div className="flex-shrink-0 bg-white rounded-lg border border-zinc-200">
             <div
               className="grid items-center px-6 h-10 text-zinc-500 text-sm font-normal leading-normal"
