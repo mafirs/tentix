@@ -451,7 +451,7 @@ export const ticketFeedbackSchema = z
     },
     {
       message:
-        "dislikeReasons, feedbackComment, and hasComplaint can only be provided when satisfactionRating is less than 3",
+        "dislikeReasons, feedbackComment, and hasComplaint can only be provided when satisfactionRating is less than or equal to 3",
     },
   );
 
