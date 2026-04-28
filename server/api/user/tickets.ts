@@ -50,10 +50,10 @@ function getTicketSortOrder(
   return [order(column), order(schema.tickets.id)];
 }
 
-// 根据已读/未读状态筛选工单ID的辅助函数（用于员工工单）
-// 未读：没有任何一个员工已读，且最后一条消息不是员工发送的
-// 已读：有至少一个员工已读，或者最后一条消息是员工发送的
-// chat_messages (主表) → 筛选最新消息 → 检查已读状态 → 返回 ticket_id
+// 根据全局待回复状态筛选工单ID的辅助函数（用于 allTicket=true）
+// unread：客户初始提交或最后一条客户有效消息之后，没有负责人/协作技术员公开回复
+// read：客户初始提交或最后一条客户有效消息之后，已有负责人/协作技术员公开回复
+// 这里保留 readStatus 参数名，是为了兼容现有接口和前端状态结构
 async function getFilteredTicketIdsByStaffReadStatus(
   readStatus: "read" | "unread",
 ) {
@@ -65,65 +65,64 @@ async function getFilteredTicketIdsByStaffReadStatus(
 
   if (readStatus === "unread") {
     const result = await db.execute(sql`
-      WITH latest_messages AS (
-        SELECT 
-          cm.id,
-          cm.ticket_id,
-          cm.sender_id,
-          ROW_NUMBER() OVER (
-            PARTITION BY cm.ticket_id 
-            ORDER BY cm.created_at DESC
-          ) as rn
-        FROM tentix.chat_messages cm
-      )
-      SELECT DISTINCT lm.ticket_id
-      FROM latest_messages lm
-      LEFT JOIN tentix.message_read_status mrs ON mrs.message_id = lm.id
-      LEFT JOIN tentix.users staff_readers ON (
-        staff_readers.id = mrs.user_id 
-        AND staff_readers.role IN ('agent', 'technician')
-      )
-      LEFT JOIN tentix.users message_senders ON message_senders.id = lm.sender_id
-      WHERE 
-        lm.rn = 1
-        AND staff_readers.id IS NULL
-        AND (
-          message_senders.role IS NULL 
-          OR message_senders.role NOT IN ('agent', 'technician')
+      WITH ticket_message_state AS (
+        SELECT
+          t.id AS ticket_id,
+          COALESCE(MAX(cm.created_at) FILTER (
+            WHERE cm.sender_id = t.customer_id
+          ), t.created_at) AS last_customer_request_at,
+          MAX(cm.created_at) FILTER (
+            WHERE cm.sender_id = t.agent_id
+              OR EXISTS (
+                SELECT 1
+                FROM tentix.technicians_to_tickets tt
+                WHERE tt.ticket_id = t.id
+                  AND tt.user_id = cm.sender_id
+              )
+          ) AS last_member_reply_at
+        FROM tentix.tickets t
+        LEFT JOIN tentix.chat_messages cm ON (
+          cm.ticket_id = t.id
+          AND cm.is_internal = false
+          AND cm.withdrawn = false
         )
+        GROUP BY t.id, t.created_at, t.customer_id, t.agent_id
+      )
+      SELECT ticket_id
+      FROM ticket_message_state
+      WHERE last_member_reply_at IS NULL
+        OR last_member_reply_at < last_customer_request_at
     `);
 
     return (result.rows as { ticket_id: string }[]).map((row) => row.ticket_id);
   } else {
     const result = await db.execute(sql`
-      WITH latest_messages AS (
-        SELECT 
-          cm.id,
-          cm.ticket_id,
-          cm.sender_id,
-          ROW_NUMBER() OVER (
-            PARTITION BY cm.ticket_id 
-            ORDER BY cm.created_at DESC
-          ) as rn
-        FROM tentix.chat_messages cm
-      )
-      SELECT DISTINCT lm.ticket_id
-      FROM latest_messages lm
-      LEFT JOIN tentix.message_read_status mrs ON mrs.message_id = lm.id
-      LEFT JOIN tentix.users staff_readers ON (
-        staff_readers.id = mrs.user_id 
-        AND staff_readers.role IN ('agent', 'technician')
-      )
-      WHERE 
-        lm.rn = 1
-        AND (
-          staff_readers.id IS NOT NULL  -- 有员工已读
-          OR 
-          lm.sender_id IN (  -- 或者发送者是员工
-            SELECT id FROM tentix.users 
-            WHERE role IN ('agent', 'technician')
-          )
+      WITH ticket_message_state AS (
+        SELECT
+          t.id AS ticket_id,
+          COALESCE(MAX(cm.created_at) FILTER (
+            WHERE cm.sender_id = t.customer_id
+          ), t.created_at) AS last_customer_request_at,
+          MAX(cm.created_at) FILTER (
+            WHERE cm.sender_id = t.agent_id
+              OR EXISTS (
+                SELECT 1
+                FROM tentix.technicians_to_tickets tt
+                WHERE tt.ticket_id = t.id
+                  AND tt.user_id = cm.sender_id
+              )
+          ) AS last_member_reply_at
+        FROM tentix.tickets t
+        LEFT JOIN tentix.chat_messages cm ON (
+          cm.ticket_id = t.id
+          AND cm.is_internal = false
+          AND cm.withdrawn = false
         )
+        GROUP BY t.id, t.created_at, t.customer_id, t.agent_id
+      )
+      SELECT ticket_id
+      FROM ticket_message_state
+      WHERE last_member_reply_at >= last_customer_request_at
     `);
     return (result.rows as { ticket_id: string }[]).map((row) => row.ticket_id);
   }
@@ -811,11 +810,14 @@ async function getAllTickets(
   const orderBy = sortBy
     ? getTicketSortOrder(sortBy, sortOrder)
     : [desc(schema.tickets.updatedAt), desc(schema.tickets.id)];
+  let filteredPendingReplyTicketIds: Set<string> | undefined;
 
-  // 【新增】如果提供了 readStatus，则按照新逻辑过滤：检查是否有任意 agent 或 technician 读过最新消息
+  // allTicket=true 时沿用 readStatus 参数：unread 表示待回复，read 表示无需回复
   if (readStatus) {
     const readStatusTicketIds =
       await getFilteredTicketIdsByStaffReadStatus(readStatus);
+    filteredPendingReplyTicketIds =
+      readStatus === "unread" ? new Set(readStatusTicketIds) : new Set();
     // 如果没有匹配的工单，可以直接返回空，避免后续查询
     if (readStatusTicketIds.length === 0) {
       return {
@@ -845,6 +847,8 @@ async function getAllTickets(
         agent: basicUserCols,
         customer: basicUserCols,
         messages: {
+          where: (messages, { and, eq }) =>
+            and(eq(messages.isInternal, false), eq(messages.withdrawn, false)),
           orderBy: [desc(schema.chatMessages.createdAt)],
           limit: 1,
           with: {
@@ -866,9 +870,13 @@ async function getAllTickets(
 
   const totalCount = totalCountResult[0]?.count || 0;
   const totalPages = Math.ceil(totalCount / pageSize);
+  const pendingReplyTicketIds =
+    filteredPendingReplyTicketIds ??
+    new Set(await getFilteredTicketIdsByStaffReadStatus("unread"));
 
   const processedTickets = tickets.map((ticket) => ({
     ...ticket,
+    pendingReply: pendingReplyTicketIds.has(ticket.id),
     messages: ticket.messages.map((message) => ({
       ...message,
       content: getAbbreviatedText(message.content, 100),
@@ -1028,7 +1036,7 @@ const ticketsRouter = new Hono<AuthEnv>().get(
       }),
       readStatus: z.enum(["read", "unread"]).optional().openapi({
         description:
-          "根据已读/未读状态筛选工单。'read' 为已读，'unread' 为未读。",
+          "根据列表模式筛选工单。allTicket=true 时 'unread' 为待回复、'read' 为无需回复；否则为个人已读/未读。",
       }),
       pending: z
         .string()

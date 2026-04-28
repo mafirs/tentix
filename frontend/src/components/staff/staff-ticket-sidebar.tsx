@@ -38,6 +38,10 @@ import { userTicketsQueryOptions } from "@lib/query";
 import useDebounce from "@hook/use-debounce";
 import { cn } from "@lib/utils";
 
+type StaffTicketsListItemType = TicketsListItemType & {
+  pendingReply?: boolean;
+};
+
 // Function to extract text content from JSONContent description
 function extractTextFromDescription(content: JSONContent): string {
   if (!content) return "";
@@ -246,7 +250,11 @@ export function StaffTicketSidebar({
   };
 
   // Check if a ticket is unread
-  const isTicketUnread = (ticket: TicketsListItemType) => {
+  const isTicketUnread = (ticket: StaffTicketsListItemType) => {
+    if (allTicket) {
+      return ticket.pendingReply ?? false;
+    }
+
     // 没有任何消息：未读
     if (!ticket.messages || ticket.messages.length === 0) {
       return true;
@@ -273,7 +281,7 @@ export function StaffTicketSidebar({
     return !lastMessage.readStatus.some((status) => status.userId === userId);
   };
 
-  const tickets = userTicketsData?.tickets || [];
+  const tickets = (userTicketsData?.tickets || []) as StaffTicketsListItemType[];
 
   // Sort tickets by updated time
   const sortedTickets = [...tickets].sort(
@@ -471,7 +479,7 @@ export function StaffTicketSidebar({
               setReadStatus(readStatus === "unread" ? "all" : "unread")
             }
           >
-            {t("unread")}
+            {allTicket ? t("pending_reply") : t("unread")}
           </Button>
           <TooltipProvider>
             <Tooltip>

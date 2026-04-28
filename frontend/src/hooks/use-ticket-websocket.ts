@@ -34,7 +34,7 @@ interface UseTicketWebSocketReturn {
     isInternal?: boolean,
   ) => Promise<void>;
   sendTypingIndicator: () => void;
-  sendReadStatus: (messageId: number) => void;
+  sendReadStatus: (messageId: number) => boolean;
   closeConnection: () => void;
   sendCustomMsg: (props: wsMsgClientType) => void;
   withdrawMessage: (messageId: number) => void;
@@ -300,6 +300,11 @@ export function useTicketWebSocket({
               });
               onUserTyping(data.userId, "stop");
             }
+            if (!data.isInternal) {
+              void queryClient.invalidateQueries({
+                queryKey: ["getUserTickets"],
+              });
+            }
             break;
 
           case "message_sent": {
@@ -310,6 +315,9 @@ export function useTicketWebSocket({
               pendingMessagesRef.current.delete(data.tempId);
             }
             handleSentMessage(data.tempId, data.messageId);
+            void queryClient.invalidateQueries({
+              queryKey: ["getUserTickets"],
+            });
             break;
           }
 
@@ -318,10 +326,18 @@ export function useTicketWebSocket({
             if (data.roomId === ticketId) {
               updateWithdrawMessage(data.messageId);
             }
+            if (!data.isInternal) {
+              void queryClient.invalidateQueries({
+                queryKey: ["getUserTickets"],
+              });
+            }
             break;
 
           case "message_read_update":
             readMessage(data.messageId, data.userId, data.readAt);
+            void queryClient.invalidateQueries({
+              queryKey: ["getUserTickets"],
+            });
             break;
 
           case "user_typing":
@@ -363,7 +379,7 @@ export function useTicketWebSocket({
         onError?.(error);
       }
     },
-    [ticketId, userId, addMessage, handleSentMessage, onError, onUserTyping, readMessage, reconcilePendingWithdrawals, toast, updateWithdrawMessage],
+    [ticketId, userId, addMessage, handleSentMessage, onError, onUserTyping, queryClient, readMessage, reconcilePendingWithdrawals, toast, updateWithdrawMessage],
   );
 
   // ==================== 重连逻辑 ====================
@@ -562,22 +578,31 @@ export function useTicketWebSocket({
   // 发送已读状态
   const sendReadStatus = useCallback(
     (messageId: number) => {
-      // 乐观更新
-      readMessage(messageId, userId, new Date().toISOString());
+      const readAt = new Date().toISOString();
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        return false;
+      }
 
-      // 发送到服务器
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try {
         wsRef.current.send(
           JSON.stringify({
             type: "message_read",
             userId,
             messageId,
-            readAt: new Date().toISOString(),
+            readAt,
           }),
         );
+        readMessage(messageId, userId, readAt);
+        void queryClient.invalidateQueries({
+          queryKey: ["getUserTickets"],
+        });
+        return true;
+      } catch (error) {
+        onError?.(error);
+        return false;
       }
     },
-    [userId, readMessage],
+    [userId, readMessage, queryClient, onError],
   );
 
   // 撤回消息

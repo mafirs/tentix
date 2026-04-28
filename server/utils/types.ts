@@ -365,6 +365,7 @@ export const userTicketSchema = createSelectSchema(schema.tickets).extend({
       readStatus: z.array(createSelectSchema(schema.messageReadStatus)),
     }),
   ),
+  pendingReply: z.boolean().optional(),
 });
 
 // feedback

@@ -178,7 +178,10 @@ export function StaffChat({ ticket, token, isTicketLoading }: StaffChatProps) {
       unreadMessages.has(messageId) &&
       !sentReadStatusRef.current.has(messageId)
     ) {
-      sendReadStatus(messageId);
+      const readStatusSent = sendReadStatus(messageId);
+      if (!readStatusSent) {
+        return;
+      }
       sentReadStatusRef.current.add(messageId);
       setUnreadMessages((prev) => {
         const next = new Set(prev);
