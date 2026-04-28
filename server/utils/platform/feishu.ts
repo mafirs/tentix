@@ -186,54 +186,137 @@ function getComplaintReasonText(reason: unknown) {
   return complaintReasonTextMap[key] || key;
 }
 
-function buildFeishuComplaintWebhookText(
-  payload: FeishuComplaintWebhookPayload,
-) {
+function getComplaintCardTheme(payload: FeishuComplaintWebhookPayload) {
+  if (
+    payload.kind === "ticket" &&
+    payload.satisfactionRating !== undefined &&
+    payload.satisfactionRating <= 2
+  ) {
+    return "red" satisfies FeiShuTheme;
+  }
+
+  return "orange" satisfies FeiShuTheme;
+}
+
+function buildFeishuComplaintWebhookCard(payload: FeishuComplaintWebhookPayload) {
   const appUrl = global.customEnv.APP_URL?.replace(/\/$/, "");
   const ticketUrl = appUrl ? `${appUrl}/staff/tickets/${payload.ticketId}` : "";
-  const lines = [
-    "投诉通知",
-    `类型：${getComplaintKindText(payload.kind)}`,
-    `工单：${payload.ticketTitle}`,
-    `工单ID：${payload.ticketId}`,
+  const fields = [
+    {
+      label: "类型",
+      value: getComplaintKindText(payload.kind),
+    },
+    {
+      label: "工单",
+      value: payload.ticketTitle,
+    },
+    {
+      label: "工单ID",
+      value: payload.ticketId,
+    },
   ];
 
   if (payload.sealosId) {
-    lines.push(`Sealos ID：${payload.sealosId}`);
+    fields.push({
+      label: "Sealos ID",
+      value: payload.sealosId,
+    });
   }
 
   if (payload.messageId !== undefined) {
-    lines.push(`消息ID：${payload.messageId}`);
+    fields.push({
+      label: "消息ID",
+      value: String(payload.messageId),
+    });
   }
 
   if (payload.targetName) {
-    lines.push(`评价对象：${payload.targetName}`);
+    fields.push({
+      label: "评价对象",
+      value: payload.targetName,
+    });
   }
 
   if (payload.satisfactionRating !== undefined) {
-    lines.push(`满意度：${payload.satisfactionRating}星`);
+    fields.push({
+      label: "满意度",
+      value: `${payload.satisfactionRating}星`,
+    });
   }
 
   if (payload.dislikeReasons?.length) {
-    lines.push(
-      `原因：${payload.dislikeReasons.map(getComplaintReasonText).join(", ")}`,
-    );
-  }
-
-  const comment = payload.feedbackComment?.trim();
-  if (comment) {
-    lines.push(`反馈：${comment}`);
+    fields.push({
+      label: "原因",
+      value: payload.dislikeReasons.map(getComplaintReasonText).join(", "),
+    });
   }
 
   if (payload.hasComplaint) {
-    lines.push("用户勾选了投诉");
+    fields.push({
+      label: "投诉勾选",
+      value: "是",
+    });
+  }
+
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "div",
+      fields: fields.map((field) => ({
+        is_short: true,
+        text: {
+          tag: "lark_md",
+          content: `**${field.label}：**\n${field.value}`,
+        },
+      })),
+    },
+  ];
+
+  const comment = payload.feedbackComment?.trim();
+  if (comment) {
+    elements.push(
+      {
+        tag: "hr",
+      },
+      {
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: `**反馈内容：**\n${comment}`,
+        },
+      },
+    );
   }
 
   if (ticketUrl) {
-    lines.push(`工单链接：${ticketUrl}`);
+    elements.push({
+      tag: "action",
+      actions: [
+        {
+          tag: "button",
+          text: {
+            tag: "plain_text",
+            content: "查看工单",
+          },
+          type: "primary",
+          url: ticketUrl,
+        },
+      ],
+    });
   }
 
-  return lines.join("\n");
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: getComplaintCardTheme(payload),
+      title: {
+        tag: "plain_text",
+        content: "投诉通知",
+      },
+    },
+    elements,
+  };
 }
 
 export async function sendFeishuComplaintWebhook(
@@ -255,10 +338,8 @@ export async function sendFeishuComplaintWebhook(
     body: JSON.stringify({
       timestamp,
       sign,
-      msg_type: "text",
-      content: {
-        text: buildFeishuComplaintWebhookText(payload),
-      },
+      msg_type: "interactive",
+      card: buildFeishuComplaintWebhookCard(payload),
     }),
   });
 
