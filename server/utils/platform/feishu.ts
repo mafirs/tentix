@@ -140,7 +140,7 @@ export type FeishuComplaintWebhookPayload = {
   kind: "message" | "staff" | "ticket";
   ticketId: string;
   ticketTitle: string;
-  userId: number;
+  sealosId?: string;
   messageId?: number;
   targetName?: string;
   satisfactionRating?: number;
@@ -194,9 +194,13 @@ function buildFeishuComplaintWebhookText(
   const lines = [
     "投诉通知",
     `类型：${getComplaintKindText(payload.kind)}`,
-    `工单：${payload.ticketTitle} (${payload.ticketId})`,
-    `用户ID：${payload.userId}`,
+    `工单：${payload.ticketTitle}`,
+    `工单ID：${payload.ticketId}`,
   ];
+
+  if (payload.sealosId) {
+    lines.push(`Sealos ID：${payload.sealosId}`);
+  }
 
   if (payload.messageId !== undefined) {
     lines.push(`消息ID：${payload.messageId}`);

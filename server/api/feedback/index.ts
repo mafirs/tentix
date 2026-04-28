@@ -245,11 +245,21 @@ const feedbackRouter = factory
         .returning();
 
       if (shouldNotifyComplaint) {
+        const sealosIdentity = await db.query.userIdentities.findFirst({
+          where: and(
+            eq(schema.userIdentities.userId, userId),
+            eq(schema.userIdentities.provider, "sealos"),
+          ),
+        });
+        const sealosId =
+          sealosIdentity?.metadata?.sealos?.accountId ||
+          sealosIdentity?.providerUserId;
+
         notifyComplaint({
           kind: "message",
           ticketId,
           ticketTitle: ticket.title,
-          userId,
+          sealosId,
           messageId,
           dislikeReasons: feedbackRecord!.dislikeReasons,
           feedbackComment: feedbackRecord!.feedbackComment,
@@ -415,11 +425,21 @@ const feedbackRouter = factory
         .returning();
 
       if (shouldNotifyComplaint) {
+        const sealosIdentity = await db.query.userIdentities.findFirst({
+          where: and(
+            eq(schema.userIdentities.userId, userId),
+            eq(schema.userIdentities.provider, "sealos"),
+          ),
+        });
+        const sealosId =
+          sealosIdentity?.metadata?.sealos?.accountId ||
+          sealosIdentity?.providerUserId;
+
         notifyComplaint({
           kind: "staff",
           ticketId,
           ticketTitle: ticket.title,
-          userId,
+          sealosId,
           targetName:
             evaluatedUser.name || evaluatedUser.nickname || String(evaluatedId),
           dislikeReasons: feedbackRecord!.dislikeReasons,
@@ -555,11 +575,21 @@ const feedbackRouter = factory
         .returning();
 
       if (shouldNotifyComplaint) {
+        const sealosIdentity = await db.query.userIdentities.findFirst({
+          where: and(
+            eq(schema.userIdentities.userId, userId),
+            eq(schema.userIdentities.provider, "sealos"),
+          ),
+        });
+        const sealosId =
+          sealosIdentity?.metadata?.sealos?.accountId ||
+          sealosIdentity?.providerUserId;
+
         notifyComplaint({
           kind: "ticket",
           ticketId,
           ticketTitle: ticket.title,
-          userId,
+          sealosId,
           satisfactionRating: feedbackRecord!.satisfactionRating,
           dislikeReasons: feedbackRecord!.dislikeReasons,
           feedbackComment: feedbackRecord!.feedbackComment,
