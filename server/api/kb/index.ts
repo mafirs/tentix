@@ -1,11 +1,30 @@
 import * as schema from "@/db/schema.ts";
-import { and, eq } from "drizzle-orm";
+import {
+  and,
+  count,
+  eq,
+  ilike,
+  inArray,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi/zod";
 import { z } from "zod";
 import "zod-openapi/extend";
-import { factory, authMiddleware, staffOnlyMiddleware } from "../middleware.ts";
+import {
+  factory,
+  authMiddleware,
+  staffOnlyMiddleware,
+  adminOnlyMiddleware,
+} from "../middleware.ts";
 import { emit, Events } from "@/utils/events/kb/bus";
+import { HTTPException } from "hono/http-exception";
+import { OpenAIEmbeddings } from "@langchain/openai";
+import { logWarning } from "@/utils/log";
+import { OPENAI_CONFIG } from "@/utils/kb/config";
+import { rebuildEditedKnowledgeMetadata } from "@/utils/kb/kb-builder";
 
 const createFavoritedSchema = z.object({
   ticketId: z.string(),
@@ -18,6 +37,163 @@ const createFavoritedResponseSchema = z.object({
   message: z.string(),
   data: z.object({ id: z.number(), syncStatus: z.string() }),
 });
+
+const knowledgeSourceTypeValues = [
+  "favorited_conversation",
+  "historical_ticket",
+  "general_knowledge",
+] as const;
+
+const knowledgeListQuerySchema = z
+  .object({
+    page: z.string().regex(/^\d+$/).optional(),
+    pageSize: z.string().regex(/^\d+$/).optional(),
+    keyword: z.string().optional(),
+    sourceType: z.enum(["all", ...knowledgeSourceTypeValues]).optional(),
+    module: z.string().optional(),
+    status: z.enum(["all", "enabled", "disabled"]).optional(),
+    failedOnly: z.enum(["true"]).optional(),
+  })
+  .strict();
+
+const knowledgeSourceParamsSchema = z.object({
+  sourceType: z.enum(knowledgeSourceTypeValues),
+  sourceId: z.string().min(1),
+});
+
+const knowledgeUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1, "标题不能为空").max(500).optional(),
+    isDeleted: z.boolean().optional(),
+    chunks: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          content: z.string().trim().min(1, "内容不能为空").max(20000),
+        }),
+      )
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.title !== undefined ||
+      value.isDeleted !== undefined ||
+      value.chunks !== undefined,
+    { message: "至少提供一个要更新的字段" },
+  );
+
+type KnowledgeListQuery = z.infer<typeof knowledgeListQuerySchema>;
+
+const editedKnowledgeEmbedder = new OpenAIEmbeddings({
+  apiKey: OPENAI_CONFIG.apiKey,
+  model: OPENAI_CONFIG.embeddingModel,
+  dimensions: 3072,
+  configuration: {
+    baseURL: OPENAI_CONFIG.baseURL,
+  },
+  batchSize: 16,
+  timeout: 60_000,
+  maxRetries: 3,
+});
+
+function hashKnowledgeContent({
+  sourceType,
+  sourceId,
+  chunkId,
+  content,
+}: {
+  sourceType: string;
+  sourceId: string;
+  chunkId: number;
+  content: string;
+}): string {
+  return Bun.hash(`${sourceType}:${sourceId}:${chunkId}:${content}`).toString();
+}
+
+function toPgVectorLiteral(vec: number[]): string {
+  return `[${vec.map((x) => (Number.isFinite(x) ? Number(x).toFixed(6) : "0")).join(",")}]`;
+}
+
+async function embedEditedKnowledgeContent(text: string): Promise<string> {
+  const input = text.replace(/\s+/g, " ").slice(0, 8000);
+  const emb = await editedKnowledgeEmbedder.embedQuery(input);
+  return toPgVectorLiteral(emb);
+}
+
+function parsePositiveInt(
+  value: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+}
+
+function buildKnowledgeWhere(
+  query: KnowledgeListQuery,
+  failedSourceIds?: string[],
+): SQL | undefined {
+  const conditions: SQL[] = [];
+  const sourceType = query.sourceType ?? "all";
+  const status = query.status ?? "all";
+  const keyword = query.keyword?.trim();
+  const module = query.module?.trim();
+
+  if (sourceType !== "all") {
+    conditions.push(eq(schema.knowledgeBase.sourceType, sourceType));
+  }
+
+  if (module) {
+    conditions.push(sql`${schema.knowledgeBase.metadata} ->> 'module' = ${module}`);
+  }
+
+  if (status === "enabled") {
+    conditions.push(eq(schema.knowledgeBase.isDeleted, false));
+  }
+
+  if (status === "disabled") {
+    conditions.push(eq(schema.knowledgeBase.isDeleted, true));
+  }
+
+  if (failedSourceIds) {
+    conditions.push(eq(schema.knowledgeBase.sourceType, "favorited_conversation"));
+    conditions.push(inArray(schema.knowledgeBase.sourceId, failedSourceIds));
+  }
+
+  if (keyword) {
+    const pattern = `%${keyword}%`;
+    const keywordCondition = or(
+      ilike(schema.knowledgeBase.title, pattern),
+      ilike(schema.knowledgeBase.content, pattern),
+      ilike(schema.knowledgeBase.sourceId, pattern),
+      sql`CAST(${schema.knowledgeBase.metadata} AS TEXT) ILIKE ${pattern}`,
+    );
+    if (keywordCondition) {
+      conditions.push(keywordCondition);
+    }
+  }
+
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+function getMetadataValue(metadata: unknown, key: string): unknown {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  return (metadata as Record<string, unknown>)[key];
+}
+
+function getMetadataString(metadata: unknown, key: string): string {
+  const value = getMetadataValue(metadata, key);
+  return typeof value === "string" ? value : "";
+}
+
+function getMetadataStringArray(metadata: unknown, key: string): string[] {
+  const value = getMetadataValue(metadata, key);
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
 
 const kbRouter = factory
   .createApp()
@@ -82,6 +258,14 @@ const kbRouter = factory
 
         emit(Events.KBFavoritesSync, created);
       } else {
+        if (existed.syncStatus === "processing") {
+          return c.json({
+            success: true,
+            message: "Favorited knowledge is already processing",
+            data: { id: existed.id, syncStatus: "processing" },
+          });
+        }
+
         // 2') 已存在：先清理对应 KB，再更新记录
         await db
           .delete(schema.knowledgeBase)
@@ -125,6 +309,404 @@ const kbRouter = factory
         message: "Favorited knowledge processed successfully",
         data: { id: recordId, syncStatus: "pending" },
       });
+    },
+  )
+  .get(
+    "/admin/items",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "List knowledge base sources for admin management",
+      security: [{ bearerAuth: [] }],
+    }),
+    zValidator("query", knowledgeListQuerySchema),
+    async (c) => {
+      const db = c.var.db;
+      const query = c.req.valid("query");
+      const page = parsePositiveInt(query.page, 1, 100000);
+      const pageSize = parsePositiveInt(query.pageSize, 20, 100);
+      const offset = (page - 1) * pageSize;
+
+      let failedSourceIds: string[] | undefined;
+      if (query.failedOnly === "true") {
+        const failedRows = await db
+          .select({ ticketId: schema.favoritedConversationsKnowledge.ticketId })
+          .from(schema.favoritedConversationsKnowledge)
+          .where(eq(schema.favoritedConversationsKnowledge.syncStatus, "failed"));
+        failedSourceIds = failedRows.map((row) => row.ticketId);
+      }
+
+      const whereClause = buildKnowledgeWhere(query, failedSourceIds);
+      const groups =
+        failedSourceIds?.length === 0
+          ? []
+          : await db
+              .select({
+                sourceType: schema.knowledgeBase.sourceType,
+                sourceId: schema.knowledgeBase.sourceId,
+                title: sql<string>`COALESCE(MAX(NULLIF(${schema.knowledgeBase.title}, '')), '')`,
+                module: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'module')`,
+                category: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'category')`,
+                chunkCount: count(),
+                accessCount: sql<number>`COALESCE(SUM(${schema.knowledgeBase.accessCount}), 0)`,
+                isDeleted: sql<boolean>`BOOL_OR(${schema.knowledgeBase.isDeleted})`,
+                updatedAt: sql<string>`MAX(${schema.knowledgeBase.updatedAt})`,
+              })
+              .from(schema.knowledgeBase)
+              .where(whereClause)
+              .groupBy(schema.knowledgeBase.sourceType, schema.knowledgeBase.sourceId)
+              .orderBy(sql`MAX(${schema.knowledgeBase.updatedAt}) DESC`);
+
+      const allGroups = await db
+        .select({
+          sourceType: schema.knowledgeBase.sourceType,
+          sourceId: schema.knowledgeBase.sourceId,
+          chunkCount: count(),
+          isDeleted: sql<boolean>`BOOL_OR(${schema.knowledgeBase.isDeleted})`,
+        })
+        .from(schema.knowledgeBase)
+        .groupBy(schema.knowledgeBase.sourceType, schema.knowledgeBase.sourceId);
+
+      const [failedSyncResult] = await db
+        .select({ count: count() })
+        .from(schema.favoritedConversationsKnowledge)
+        .where(eq(schema.favoritedConversationsKnowledge.syncStatus, "failed"));
+
+      const moduleRows = await db
+        .select({
+          module: sql<string>`${schema.knowledgeBase.metadata} ->> 'module'`,
+        })
+        .from(schema.knowledgeBase)
+        .where(sql`NULLIF(${schema.knowledgeBase.metadata} ->> 'module', '') IS NOT NULL`)
+        .groupBy(sql`${schema.knowledgeBase.metadata} ->> 'module'`)
+        .orderBy(sql`${schema.knowledgeBase.metadata} ->> 'module'`);
+
+      const pageGroups = groups.slice(offset, offset + pageSize);
+      const favoriteSourceIds = pageGroups
+        .filter((row) => row.sourceType === "favorited_conversation")
+        .map((row) => row.sourceId);
+      const favoriteRows = favoriteSourceIds.length
+        ? await db.query.favoritedConversationsKnowledge.findMany({
+            where: inArray(
+              schema.favoritedConversationsKnowledge.ticketId,
+              favoriteSourceIds,
+            ),
+          })
+        : [];
+      const favoriteByTicketId = new Map(
+        favoriteRows.map((row) => [row.ticketId, row]),
+      );
+
+      return c.json({
+        items: pageGroups.map((row) => {
+          const favorite = favoriteByTicketId.get(row.sourceId);
+          return {
+            sourceType: row.sourceType,
+            sourceId: row.sourceId,
+            title: row.title || row.sourceId,
+            module: row.module ?? "",
+            category: row.category ?? "",
+            chunkCount: Number(row.chunkCount || 0),
+            accessCount: Number(row.accessCount || 0),
+            isDeleted: Boolean(row.isDeleted),
+            updatedAt: row.updatedAt,
+            syncFailed: favorite?.syncStatus === "failed",
+            syncedAt: favorite?.syncedAt ?? null,
+          };
+        }),
+        pagination: {
+          page,
+          pageSize,
+          total: groups.length,
+          totalPages: Math.ceil(groups.length / pageSize),
+        },
+        summary: {
+          enabledCount: allGroups.filter((row) => !Boolean(row.isDeleted)).length,
+          disabledCount: allGroups.filter((row) => Boolean(row.isDeleted)).length,
+          chunkCount: allGroups.reduce((sum, row) => sum + Number(row.chunkCount || 0), 0),
+          failedSyncCount: Number(failedSyncResult?.count || 0),
+        },
+        filters: {
+          modules: moduleRows.map((row) => row.module).filter(Boolean),
+        },
+      });
+    },
+  )
+  .get(
+    "/admin/items/:sourceType/:sourceId",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Get one knowledge base source with chunks",
+      security: [{ bearerAuth: [] }],
+    }),
+    zValidator("param", knowledgeSourceParamsSchema),
+    async (c) => {
+      const db = c.var.db;
+      const { sourceType, sourceId } = c.req.valid("param");
+      const chunks = await db
+        .select({
+          id: schema.knowledgeBase.id,
+          sourceType: schema.knowledgeBase.sourceType,
+          sourceId: schema.knowledgeBase.sourceId,
+          chunkId: schema.knowledgeBase.chunkId,
+          title: schema.knowledgeBase.title,
+          content: schema.knowledgeBase.content,
+          metadata: schema.knowledgeBase.metadata,
+          score: schema.knowledgeBase.score,
+          accessCount: schema.knowledgeBase.accessCount,
+          lang: schema.knowledgeBase.lang,
+          tokenCount: schema.knowledgeBase.tokenCount,
+          isDeleted: schema.knowledgeBase.isDeleted,
+          createdAt: schema.knowledgeBase.createdAt,
+          updatedAt: schema.knowledgeBase.updatedAt,
+        })
+        .from(schema.knowledgeBase)
+        .where(
+          and(
+            eq(schema.knowledgeBase.sourceType, sourceType),
+            eq(schema.knowledgeBase.sourceId, sourceId),
+          ),
+        )
+        .orderBy(schema.knowledgeBase.chunkId);
+
+      if (chunks.length === 0) {
+        throw new HTTPException(404, { message: "Knowledge item not found" });
+      }
+
+      const firstChunk = chunks.find((chunk) => Number(chunk.chunkId) === 0) ?? chunks[0]!;
+      const favorite =
+        sourceType === "favorited_conversation"
+          ? await db.query.favoritedConversationsKnowledge.findFirst({
+              where: eq(schema.favoritedConversationsKnowledge.ticketId, sourceId),
+            })
+          : null;
+
+      return c.json({
+        sourceType,
+        sourceId,
+        title: firstChunk.title || sourceId,
+        module: getMetadataString(firstChunk.metadata, "module"),
+        category: getMetadataString(firstChunk.metadata, "category"),
+        area: getMetadataString(firstChunk.metadata, "area"),
+        tags: getMetadataStringArray(firstChunk.metadata, "tags"),
+        problemSummary: getMetadataString(firstChunk.metadata, "problem_summary"),
+        isDeleted: chunks.every((chunk) => Boolean(chunk.isDeleted)),
+        accessCount: chunks.reduce((sum, chunk) => sum + Number(chunk.accessCount || 0), 0),
+        syncFailed: favorite?.syncStatus === "failed",
+        syncedAt: favorite?.syncedAt ?? null,
+        ticketId: favorite?.ticketId ?? null,
+        createdAt: firstChunk.createdAt,
+        updatedAt: firstChunk.updatedAt,
+        chunks: chunks.map((chunk) => ({
+          id: chunk.id,
+          chunkId: Number(chunk.chunkId),
+          title: chunk.title,
+          content: chunk.content,
+          metadata: chunk.metadata,
+          score: Number(chunk.score || 0),
+          accessCount: Number(chunk.accessCount || 0),
+          lang: chunk.lang,
+          tokenCount: Number(chunk.tokenCount || 0),
+          isDeleted: Boolean(chunk.isDeleted),
+          createdAt: chunk.createdAt,
+          updatedAt: chunk.updatedAt,
+        })),
+      });
+    },
+  )
+  .patch(
+    "/admin/items/:sourceType/:sourceId",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Update knowledge title, status, chunks, and rebuilt metadata",
+      security: [{ bearerAuth: [] }],
+    }),
+    zValidator("param", knowledgeSourceParamsSchema),
+    zValidator("json", knowledgeUpdateSchema),
+    async (c) => {
+      const db = c.var.db;
+      const { sourceType, sourceId } = c.req.valid("param");
+      const payload = c.req.valid("json");
+      const existing = await db
+        .select()
+        .from(schema.knowledgeBase)
+        .where(
+          and(
+            eq(schema.knowledgeBase.sourceType, sourceType),
+            eq(schema.knowledgeBase.sourceId, sourceId),
+          ),
+        )
+        .orderBy(schema.knowledgeBase.chunkId);
+
+      if (existing.length === 0) {
+        throw new HTTPException(404, { message: "Knowledge item not found" });
+      }
+
+      const existingById = new Map(existing.map((row) => [row.id, row]));
+      const changedContentById = new Map<string, string>();
+      for (const chunk of payload.chunks ?? []) {
+        const row = existingById.get(chunk.id);
+        if (!row) {
+          throw new HTTPException(400, { message: "Invalid knowledge chunk" });
+        }
+        changedContentById.set(chunk.id, chunk.content);
+      }
+
+      const shouldRebuildMetadata =
+        payload.title !== undefined || changedContentById.size > 0;
+      const nextTitle = payload.title ?? existing[0]?.title ?? "";
+      const nextChunks = existing.map((row) => ({
+        row,
+        content: changedContentById.get(row.id) ?? row.content,
+      }));
+      const baseMetadata =
+        existing[0]?.metadata && typeof existing[0].metadata === "object"
+          ? (existing[0].metadata as Record<string, unknown>)
+          : {};
+      let rebuilt: Awaited<ReturnType<typeof rebuildEditedKnowledgeMetadata>> | null = null;
+      const changedEmbeddingById = new Map<string, string>();
+      const nextContentById = new Map<string, string>();
+
+      if (shouldRebuildMetadata) {
+        try {
+          rebuilt = await rebuildEditedKnowledgeMetadata({
+            db,
+            sourceType,
+            sourceId,
+            title: nextTitle,
+            metadata: baseMetadata,
+            chunks: nextChunks.map((item) => ({
+              chunkId: Number(item.row.chunkId),
+              content: item.content,
+            })),
+          });
+        } catch (err) {
+          logWarning(`[kb.admin.rebuildMetadata] failed source=${sourceType}:${sourceId}: ${String(err)}`);
+          throw new HTTPException(502, {
+            message: "Failed to rebuild knowledge metadata",
+          });
+        }
+      }
+
+      if (changedContentById.size > 0 || rebuilt?.summaryContent) {
+        try {
+          for (const item of nextChunks) {
+            if (!changedContentById.has(item.row.id)) {
+              if (
+                rebuilt?.summaryContent &&
+                Number(item.row.chunkId) === 0 &&
+                !changedContentById.has(item.row.id) &&
+                item.content !== rebuilt.summaryContent
+              ) {
+                nextContentById.set(item.row.id, rebuilt.summaryContent);
+              } else {
+                continue;
+              }
+            }
+            const content = nextContentById.get(item.row.id) ?? item.content;
+            changedEmbeddingById.set(
+              item.row.id,
+              await embedEditedKnowledgeContent(content),
+            );
+          }
+        } catch (err) {
+          logWarning(`[kb.admin.embed] failed source=${sourceType}:${sourceId}: ${String(err)}`);
+          throw new HTTPException(502, {
+            message: "Failed to rebuild knowledge embedding",
+          });
+        }
+      }
+
+      await db.transaction(async (tx) => {
+        if (shouldRebuildMetadata && rebuilt) {
+          for (const item of nextChunks) {
+            const metadata =
+              item.row.metadata && typeof item.row.metadata === "object"
+                ? (item.row.metadata as Record<string, unknown>)
+                : {};
+            const embedding = changedEmbeddingById.get(item.row.id);
+            const content = nextContentById.get(item.row.id) ?? item.content;
+            const nextMetadata = {
+              ...metadata,
+              problem_summary: rebuilt.metadata.problem_summary,
+              solution_steps: rebuilt.metadata.solution_steps,
+              generated_queries: rebuilt.metadata.generated_queries,
+              tags: rebuilt.metadata.tags,
+            };
+            await tx
+              .update(schema.knowledgeBase)
+              .set({
+                title: nextTitle,
+                metadata: nextMetadata,
+                updatedAt: sql`NOW()`,
+                ...(embedding
+                  ? {
+                      content,
+                      embedding: sql`${embedding}::tentix.vector(3072)`,
+                      contentHash: hashKnowledgeContent({
+                        sourceType,
+                        sourceId,
+                        chunkId: Number(item.row.chunkId),
+                        content,
+                      }),
+                    }
+                  : {}),
+              })
+              .where(eq(schema.knowledgeBase.id, item.row.id));
+          }
+        }
+
+        if (payload.isDeleted !== undefined) {
+          await tx
+            .update(schema.knowledgeBase)
+            .set({
+              isDeleted: payload.isDeleted,
+              updatedAt: sql`NOW()`,
+            })
+            .where(
+              and(
+                eq(schema.knowledgeBase.sourceType, sourceType),
+                eq(schema.knowledgeBase.sourceId, sourceId),
+              ),
+            );
+        }
+      });
+
+      return c.json({ success: true });
+    },
+  )
+  .delete(
+    "/admin/items/:sourceType/:sourceId",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Delete knowledge source and its chunks",
+      security: [{ bearerAuth: [] }],
+    }),
+    zValidator("param", knowledgeSourceParamsSchema),
+    async (c) => {
+      const db = c.var.db;
+      const { sourceType, sourceId } = c.req.valid("param");
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(schema.knowledgeBase)
+          .where(
+            and(
+              eq(schema.knowledgeBase.sourceType, sourceType),
+              eq(schema.knowledgeBase.sourceId, sourceId),
+            ),
+          );
+
+        if (sourceType === "favorited_conversation") {
+          await tx
+            .delete(schema.favoritedConversationsKnowledge)
+            .where(eq(schema.favoritedConversationsKnowledge.ticketId, sourceId));
+        }
+      });
+
+      return c.json({ success: true });
     },
   );
 

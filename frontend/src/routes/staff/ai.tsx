@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { StaffSidebar } from "@comp/staff/sidebar";
 import { RouteTransition } from "@comp/page-transition";
 import {
@@ -35,6 +35,14 @@ import {
   ItemGroup,
   ItemTitle,
   ItemDescription,
+  Badge,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Skeleton,
+  Textarea,
 } from "tentix-ui";
 import {
   useMemo,
@@ -47,6 +55,7 @@ import {
 import { useTranslation } from "i18n";
 import {
   useSuspenseQuery,
+  useQuery,
   useMutation,
   useQueryClient,
   queryOptions,
@@ -60,6 +69,11 @@ import {
   Pencil,
   Trash2,
   Camera,
+  RefreshCw,
+  AlertTriangle,
+  ExternalLink,
+  Database,
+  Save,
 } from "lucide-react";
 import { uploadAvatar, deleteOldAvatar } from "@utils/avatar-manager";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -71,6 +85,7 @@ import { Tabs } from "@comp/common/tabs";
 import useDebounce from "@hook/use-debounce";
 import { useSettingsModal } from "@modal/use-settings-modal";
 import { useTicketModules } from "@store/app-config";
+import { cn } from "@lib/utils";
 
 function getErrorMessage(err: unknown, fallback = "操作失败"): string {
   if (typeof err === "object" && err && "message" in err) {
@@ -112,6 +127,136 @@ const workflowsBasicQueryOptions = (keyword?: string) => {
     },
   });
 };
+
+type KnowledgeSourceType =
+  | "favorited_conversation"
+  | "historical_ticket"
+  | "general_knowledge";
+
+type KnowledgeStatusFilter = "all" | "enabled" | "disabled";
+
+type KnowledgeListFilters = {
+  keyword: string;
+  sourceType: "all" | KnowledgeSourceType;
+  module: string;
+  status: KnowledgeStatusFilter;
+  failedOnly: boolean;
+};
+
+type KnowledgeListItem = {
+  sourceType: KnowledgeSourceType;
+  sourceId: string;
+  title: string;
+  module: string;
+  category: string;
+  chunkCount: number;
+  accessCount: number;
+  isDeleted: boolean;
+  updatedAt: string;
+  syncFailed: boolean;
+  syncedAt: string | null;
+};
+
+type KnowledgeChunk = {
+  id: string;
+  chunkId: number;
+  title: string;
+  content: string;
+  metadata: unknown;
+  score: number;
+  accessCount: number;
+  lang: string | null;
+  tokenCount: number;
+  isDeleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type KnowledgeDetail = {
+  sourceType: KnowledgeSourceType;
+  sourceId: string;
+  title: string;
+  module: string;
+  category: string;
+  area: string;
+  tags: string[];
+  problemSummary: string;
+  isDeleted: boolean;
+  accessCount: number;
+  syncFailed: boolean;
+  syncedAt: string | null;
+  ticketId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  chunks: KnowledgeChunk[];
+};
+
+type KnowledgeListResponse = {
+  items: KnowledgeListItem[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+  };
+  summary: {
+    enabledCount: number;
+    disabledCount: number;
+    chunkCount: number;
+    failedSyncCount: number;
+  };
+  filters: {
+    modules: string[];
+  };
+};
+
+const SOURCE_TYPE_LABELS: Record<KnowledgeSourceType, string> = {
+  favorited_conversation: "精选案例",
+  historical_ticket: "历史工单",
+  general_knowledge: "通用知识",
+};
+
+function makeKnowledgeKey(item: Pick<KnowledgeListItem, "sourceType" | "sourceId">) {
+  return `${item.sourceType}:${item.sourceId}`;
+}
+
+const knowledgeBaseQueryOptions = (filters: KnowledgeListFilters) => {
+  const normalized = filters.keyword.trim();
+  return queryOptions({
+    queryKey: ["admin-knowledge-base", filters, normalized],
+    queryFn: async (): Promise<KnowledgeListResponse> => {
+      const res = await apiClient.kb.admin.items.$get({
+        query: {
+          page: "1",
+          pageSize: "50",
+          keyword: normalized || undefined,
+          sourceType: filters.sourceType === "all" ? undefined : filters.sourceType,
+          module: filters.module === "all" ? undefined : filters.module,
+          status: filters.status === "all" ? undefined : filters.status,
+          failedOnly: filters.failedOnly ? "true" : undefined,
+        },
+      });
+      return (await res.json()) as KnowledgeListResponse;
+    },
+  });
+};
+
+const knowledgeDetailQueryOptions = (
+  sourceType: KnowledgeSourceType | undefined,
+  sourceId: string | undefined,
+) =>
+  queryOptions({
+    queryKey: ["admin-knowledge-base-detail", sourceType, sourceId],
+    queryFn: async (): Promise<KnowledgeDetail> => {
+      if (!sourceType || !sourceId) {
+        throw new Error("Missing knowledge source");
+      }
+      const res = await apiClient.kb.admin.items[":sourceType"][":sourceId"].$get({
+        param: { sourceType, sourceId },
+      });
+      return (await res.json()) as KnowledgeDetail;
+    },
+  });
 
 // 为列表图标提供一组可选的 Tailwind 色系（文本+浅色背景）
 const TAILWIND_COLOR_COMBOS: string[] = [
@@ -187,10 +332,14 @@ export const Route = createFileRoute("/staff/ai")({
 
 export function RouteComponent() {
   const { tab: searchTab } = Route.useSearch();
-  const [tab, setTab] = useState<"ai" | "workflow">("ai");
+  const [tab, setTab] = useState<"ai" | "workflow" | "knowledge">("ai");
 
   useEffect(() => {
-    if (searchTab === "workflow" || searchTab === "ai") {
+    if (
+      searchTab === "workflow" ||
+      searchTab === "ai" ||
+      searchTab === "knowledge"
+    ) {
       setTab(searchTab);
     }
   }, [searchTab]);
@@ -211,6 +360,11 @@ export function RouteComponent() {
         label: "工作流",
         content: <WorkflowsTab />,
       },
+      {
+        key: "knowledge",
+        label: "知识库",
+        content: <KnowledgeBaseTab />,
+      },
     ],
     [],
   );
@@ -223,7 +377,9 @@ export function RouteComponent() {
           <Tabs
             tabs={tabs}
             activeTab={tab}
-            onTabChange={(tabKey) => setTab(tabKey as "ai" | "workflow")}
+            onTabChange={(tabKey) =>
+              setTab(tabKey as "ai" | "workflow" | "knowledge")
+            }
             className="h-full"
           />
         </div>
@@ -834,6 +990,518 @@ function WorkflowsListSkeleton() {
         </Item>
       ))}
     </ItemGroup>
+  );
+}
+
+function KnowledgeBaseTab() {
+  const queryClient = useQueryClient();
+  const [keyword, setKeyword] = useState("");
+  const debouncedKeyword = useDebounce(keyword, 300);
+  const [sourceType, setSourceType] =
+    useState<KnowledgeListFilters["sourceType"]>("all");
+  const [module, setModule] = useState("all");
+  const [status, setStatus] = useState<KnowledgeStatusFilter>("all");
+  const [failedOnly, setFailedOnly] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const filters = useMemo(
+    () => ({
+      keyword: debouncedKeyword,
+      sourceType,
+      module,
+      status,
+      failedOnly,
+    }),
+    [debouncedKeyword, sourceType, module, status, failedOnly],
+  );
+  const listQuery = useQuery(knowledgeBaseQueryOptions(filters));
+  const items = listQuery.data?.items ?? [];
+
+  useEffect(() => {
+    if (!items.length) {
+      setSelectedKey(null);
+      return;
+    }
+    if (!selectedKey || !items.some((item) => makeKnowledgeKey(item) === selectedKey)) {
+      setSelectedKey(makeKnowledgeKey(items[0]!));
+    }
+  }, [items, selectedKey]);
+
+  const selectedItem =
+    items.find((item) => makeKnowledgeKey(item) === selectedKey) ?? null;
+  const detailQuery = useQuery({
+    ...knowledgeDetailQueryOptions(selectedItem?.sourceType, selectedItem?.sourceId),
+    enabled: Boolean(selectedItem),
+  });
+  const detail = detailQuery.data;
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftChunks, setDraftChunks] = useState<KnowledgeChunk[]>([]);
+
+  useEffect(() => {
+    setDraftTitle(detail?.title ?? "");
+    setDraftChunks(detail?.chunks ?? []);
+  }, [detail?.sourceType, detail?.sourceId, detail?.updatedAt]);
+
+  const invalidateKnowledgeQueries = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
+    if (selectedItem) {
+      queryClient.invalidateQueries({
+        queryKey: [
+          "admin-knowledge-base-detail",
+          selectedItem.sourceType,
+          selectedItem.sourceId,
+        ],
+      });
+    }
+  }, [queryClient, selectedItem]);
+
+  const updateKnowledgeMutation = useMutation({
+    mutationFn: async ({
+      sourceType,
+      sourceId,
+      data,
+    }: {
+      sourceType: KnowledgeSourceType;
+      sourceId: string;
+      data: {
+        title?: string;
+        isDeleted?: boolean;
+        chunks?: Array<{ id: string; content: string }>;
+      };
+    }) => {
+      const res = await apiClient.kb.admin.items[":sourceType"][":sourceId"].$patch({
+        param: { sourceType, sourceId },
+        json: data,
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(getErrorMessage(errorData, "保存失败"));
+      }
+      return res.json();
+    },
+    onSuccess: invalidateKnowledgeQueries,
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "保存失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteKnowledgeMutation = useMutation({
+    mutationFn: async ({
+      sourceType,
+      sourceId,
+    }: {
+      sourceType: KnowledgeSourceType;
+      sourceId: string;
+    }) => {
+      const res = await apiClient.kb.admin.items[":sourceType"][":sourceId"].$delete({
+        param: { sourceType, sourceId },
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(getErrorMessage(errorData, "删除失败"));
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setDeleteDialogOpen(false);
+      setSelectedKey(null);
+      toast({ title: "已删除" });
+      queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "删除失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleRefresh = () => {
+    invalidateKnowledgeQueries();
+  };
+
+  const handleSave = () => {
+    if (!detail) return;
+    const title = draftTitle.trim();
+    if (!title) {
+      toast({ title: "标题不能为空", variant: "destructive" });
+      return;
+    }
+    const changedChunks = draftChunks.filter((chunk) => {
+      const original = detail.chunks.find((item) => item.id === chunk.id);
+      return original && original.content !== chunk.content;
+    });
+    if (title === detail.title && changedChunks.length === 0) {
+      toast({ title: "没有需要保存的改动" });
+      return;
+    }
+
+    updateKnowledgeMutation.mutate(
+      {
+        sourceType: detail.sourceType,
+        sourceId: detail.sourceId,
+        data: {
+          title: title !== detail.title ? title : undefined,
+          chunks: changedChunks.length
+            ? changedChunks.map((chunk) => ({
+                id: chunk.id,
+                content: chunk.content,
+              }))
+            : undefined,
+        },
+      },
+      { onSuccess: () => toast({ title: "已保存并重建索引" }) },
+    );
+  };
+
+  const handleToggleDisabled = () => {
+    if (!detail) return;
+    updateKnowledgeMutation.mutate(
+      {
+        sourceType: detail.sourceType,
+        sourceId: detail.sourceId,
+        data: { isDeleted: !detail.isDeleted },
+      },
+      { onSuccess: () => toast({ title: detail.isDeleted ? "已启用" : "已禁用" }) },
+    );
+  };
+
+  const handleConfirmDelete = () => {
+    if (!detail) return;
+    deleteKnowledgeMutation.mutate({
+      sourceType: detail.sourceType,
+      sourceId: detail.sourceId,
+    });
+  };
+
+  const summary = listQuery.data?.summary;
+  const isMutating =
+    updateKnowledgeMutation.isPending || deleteKnowledgeMutation.isPending;
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-background">
+      <div className="border-b border-border px-5 py-4">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold">知识库</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              管理 AI 回答时可召回的知识内容，保存后自动重建索引
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={handleRefresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-5 text-sm">
+          <div>
+            <span className="text-muted-foreground">可用知识</span>
+            <span className="ml-2 font-semibold">{summary?.enabledCount ?? 0}</span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">知识片段</span>
+            <span className="ml-2 font-semibold">{summary?.chunkCount ?? 0}</span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">已禁用</span>
+            <span className="ml-2 font-semibold">{summary?.disabledCount ?? 0}</span>
+          </div>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs",
+              failedOnly
+                ? "bg-destructive text-destructive-foreground"
+                : "bg-destructive/10 text-destructive",
+            )}
+            onClick={() => setFailedOnly((value) => !value)}
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            同步失败
+            <span className="font-semibold">{summary?.failedSyncCount ?? 0}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <div className="relative min-w-[260px] flex-1">
+          <Input
+            placeholder="搜索标题、内容、标签、知识 ID、工单 ID..."
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            className="h-9 pl-9"
+          />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        </div>
+        <Select value={sourceType} onValueChange={(value) => setSourceType(value as KnowledgeListFilters["sourceType"])}>
+          <SelectTrigger className="h-9 w-[120px]">
+            <SelectValue placeholder="来源" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部来源</SelectItem>
+            <SelectItem value="favorited_conversation">精选案例</SelectItem>
+            <SelectItem value="historical_ticket">历史工单</SelectItem>
+            <SelectItem value="general_knowledge">通用知识</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={module} onValueChange={setModule}>
+          <SelectTrigger className="h-9 w-[120px]">
+            <SelectValue placeholder="模块" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部模块</SelectItem>
+            {(listQuery.data?.filters.modules ?? []).map((item) => (
+              <SelectItem key={item} value={item}>
+                {item}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={status} onValueChange={(value) => setStatus(value as KnowledgeStatusFilter)}>
+          <SelectTrigger className="h-9 w-[120px]">
+            <SelectValue placeholder="状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="enabled">启用</SelectItem>
+            <SelectItem value="disabled">禁用</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {listQuery.isLoading ? (
+        <KnowledgeBaseSkeleton />
+      ) : listQuery.isError ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-destructive">
+          {getErrorMessage(listQuery.error, "知识库加载失败")}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+          <Database className="h-10 w-10" />
+          <div className="text-sm">暂无知识内容</div>
+        </div>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
+          <div className="min-h-0 overflow-auto border-r border-border p-2">
+            {items.map((item) => {
+              const key = makeKnowledgeKey(item);
+              const active = key === selectedKey;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSelectedKey(key)}
+                  className={cn(
+                    "mb-1 w-full rounded-md px-3 py-3 text-left text-sm transition-colors",
+                    active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                  )}
+                >
+                  <div className="line-clamp-2 font-medium">{item.title}</div>
+                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>{SOURCE_TYPE_LABELS[item.sourceType]}</span>
+                    <span>{item.isDeleted ? "已禁用" : "启用"}</span>
+                    {item.syncFailed ? <span className="text-destructive">同步失败</span> : null}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {item.module || "未分模块"} · {item.chunkCount} 个知识片段 · {item.accessCount} 次命中
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {formatRelativeFromNow(item.updatedAt)}更新
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="min-h-0 overflow-auto p-5">
+            {!selectedItem ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                请选择一条知识
+              </div>
+            ) : detailQuery.isLoading ? (
+              <KnowledgeDetailSkeleton />
+            ) : detailQuery.isError ? (
+              <div className="flex h-full items-center justify-center text-sm text-destructive">
+                {getErrorMessage(detailQuery.error, "知识详情加载失败")}
+              </div>
+            ) : detail ? (
+              <div className="space-y-5">
+                {detail.syncFailed ? (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    同步失败。可保存当前内容触发索引重建。
+                  </div>
+                ) : null}
+                <div>
+                  <label className="mb-2 block text-xs text-muted-foreground">
+                    标题
+                  </label>
+                  <Input
+                    value={draftTitle}
+                    onChange={(e) => setDraftTitle(e.target.value)}
+                    className="h-10 text-base font-medium"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">来源：</span>
+                    {SOURCE_TYPE_LABELS[detail.sourceType]}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">知识 ID：</span>
+                    <span className="font-mono text-xs">{detail.sourceId}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">模块：</span>
+                    {detail.module || "未分模块"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">分类：</span>
+                    {detail.category || "未分类"}
+                  </div>
+                  {detail.ticketId ? (
+                    <div className="col-span-2">
+                      <Button variant="ghost" size="sm" asChild className="h-7 px-0">
+                        <Link to="/staff/tickets/$id" params={{ id: detail.ticketId }}>
+                          <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                          打开工单
+                        </Link>
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                {detail.tags.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-muted-foreground">标签：</span>
+                    {detail.tags.map((tag) => (
+                      <Badge key={tag} variant="outline">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="border-t border-border pt-5">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="text-sm font-medium">内容片段</div>
+                    <div className="text-xs text-muted-foreground">
+                      未点击保存前不会写入数据库
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    {draftChunks.map((chunk, index) => (
+                      <div key={chunk.id} className="space-y-2">
+                        <div className="text-xs text-muted-foreground">
+                          {chunk.chunkId === 0 ? "AI 摘要" : `原始内容 ${index}`}
+                        </div>
+                        <Textarea
+                          value={chunk.content}
+                          onChange={(e) =>
+                            setDraftChunks((prev) =>
+                              prev.map((item) =>
+                                item.id === chunk.id
+                                  ? { ...item, content: e.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          className="min-h-[130px] resize-y text-sm leading-6"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button onClick={handleSave} disabled={isMutating}>
+                    <Save className="mr-2 h-4 w-4" />
+                    保存并重建索引
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleToggleDisabled}
+                    disabled={isMutating}
+                  >
+                    {detail.isDeleted ? "启用" : "禁用"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="ml-auto text-destructive hover:text-destructive"
+                    onClick={() => setDeleteDialogOpen(true)}
+                    disabled={isMutating}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    删除
+                  </Button>
+                </div>
+
+                <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>确认删除知识</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-2 text-sm text-muted-foreground">
+                      <p>删除后会移除这条知识的全部片段。</p>
+                      <p>相关命中记录会被级联删除，历史命中分析数据会减少。</p>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setDeleteDialogOpen(false)}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={handleConfirmDelete}
+                        disabled={deleteKnowledgeMutation.isPending}
+                      >
+                        确定删除
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgeBaseSkeleton() {
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
+      <div className="space-y-2 border-r border-border p-3">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <Skeleton key={index} className="h-24 w-full" />
+        ))}
+      </div>
+      <div className="space-y-4 p-5">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeDetailSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-16 w-full" />
+      <Skeleton className="h-36 w-full" />
+      <Skeleton className="h-36 w-full" />
+    </div>
   );
 }
 
