@@ -188,9 +188,10 @@ function getComplaintReasonText(reason: unknown) {
 
 function getComplaintCardTheme(payload: FeishuComplaintWebhookPayload) {
   if (
-    payload.kind === "ticket" &&
-    payload.satisfactionRating !== undefined &&
-    payload.satisfactionRating <= 2
+    payload.hasComplaint ||
+    (payload.kind === "ticket" &&
+      payload.satisfactionRating !== undefined &&
+      payload.satisfactionRating <= 2)
   ) {
     return "red" satisfies FeiShuTheme;
   }
@@ -207,7 +208,7 @@ function buildFeishuComplaintWebhookCard(payload: FeishuComplaintWebhookPayload)
       value: getComplaintKindText(payload.kind),
     },
     {
-      label: "工单",
+      label: "工单标题",
       value: payload.ticketTitle,
     },
     {
@@ -253,39 +254,30 @@ function buildFeishuComplaintWebhookCard(payload: FeishuComplaintWebhookPayload)
 
   if (payload.hasComplaint) {
     fields.push({
-      label: "投诉勾选",
-      value: "是",
+      label: "用户操作",
+      value: "勾选投诉",
+    });
+  }
+
+  const comment = payload.feedbackComment?.trim();
+  if (comment) {
+    fields.push({
+      label: "反馈内容",
+      value: comment,
     });
   }
 
   const elements: Record<string, unknown>[] = [
     {
       tag: "div",
-      fields: fields.map((field) => ({
-        is_short: true,
-        text: {
-          tag: "lark_md",
-          content: `**${field.label}：**\n${field.value}`,
-        },
-      })),
+      text: {
+        tag: "lark_md",
+        content: fields
+          .map((field) => `**${field.label}：**${field.value}`)
+          .join("\n"),
+      },
     },
   ];
-
-  const comment = payload.feedbackComment?.trim();
-  if (comment) {
-    elements.push(
-      {
-        tag: "hr",
-      },
-      {
-        tag: "div",
-        text: {
-          tag: "lark_md",
-          content: `**反馈内容：**\n${comment}`,
-        },
-      },
-    );
-  }
 
   if (ticketUrl) {
     elements.push({
