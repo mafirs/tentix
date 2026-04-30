@@ -1011,6 +1011,10 @@ function KnowledgeBaseTab() {
   const [failedOnly, setFailedOnly] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const resetStatusFilters = useCallback(() => {
+    setStatus("all");
+    setFailedOnly(false);
+  }, []);
   const filters = useMemo(
     () => ({
       keyword: debouncedKeyword,
@@ -1213,8 +1217,16 @@ function KnowledgeBaseTab() {
 
         <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
           <div className="grid grid-cols-4 divide-x divide-border">
-            <KbStatCell label="可用知识" value={summary?.enabledCount ?? 0} />
-            <KbStatCell label="知识片段" value={summary?.chunkCount ?? 0} />
+            <KbStatCell
+              label="可用知识"
+              value={summary?.enabledCount ?? 0}
+              onClick={resetStatusFilters}
+            />
+            <KbStatCell
+              label="知识片段"
+              value={summary?.chunkCount ?? 0}
+              onClick={resetStatusFilters}
+            />
             <button
               type="button"
               aria-pressed={status === "disabled"}
@@ -1415,7 +1427,9 @@ function KnowledgeBaseTab() {
                     )}
                   />
                   <span className="text-muted-foreground">
-                    {SOURCE_TYPE_LABELS[detail.sourceType]}
+                    {detail.sourceType === "favorited_conversation"
+                      ? "工单 ID"
+                      : SOURCE_TYPE_LABELS[detail.sourceType]}
                   </span>
                   <span className="text-muted-foreground/50">·</span>
                   <span className="font-mono text-muted-foreground">
@@ -1580,13 +1594,15 @@ function KbStatCell({
   label,
   value,
   muted,
+  onClick,
 }: {
   label: string;
   value: number;
   muted?: boolean;
+  onClick?: () => void;
 }) {
-  return (
-    <div className="px-4 py-2.5">
+  const content = (
+    <>
       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
@@ -1598,6 +1614,24 @@ function KbStatCell({
       >
         {value}
       </div>
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="px-4 py-2.5 text-left transition-colors hover:bg-accent/50"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className="px-4 py-2.5">
+      {content}
     </div>
   );
 }
