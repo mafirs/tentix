@@ -162,6 +162,15 @@ export type KnowledgeMetadataResult = {
   summaryContent: string;
 };
 
+export type EditedKnowledgeSourceContext = {
+  description: string;
+  conversationText: string;
+  module?: string | null;
+  category?: string | null;
+  area?: string | null;
+  images: string[];
+};
+
 function emptyKnowledgeMetadataSummary(): KnowledgeMetadataSummary {
   return {
     problem_summary: "",
@@ -326,6 +335,79 @@ function getMetadataString(metadata: unknown, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+export async function loadEditedKnowledgeSourceContext({
+  db,
+  sourceType,
+  sourceId,
+  metadata,
+}: {
+  db: ReturnType<typeof connectDB>;
+  sourceType: string;
+  sourceId: string;
+  metadata: Record<string, unknown>;
+}): Promise<EditedKnowledgeSourceContext | undefined> {
+  if (sourceType !== "favorited_conversation") return undefined;
+
+  let description = "";
+  let conversationText = "";
+  let module = getMetadataString(metadata, "module");
+  let category = getMetadataString(metadata, "category");
+  let area = getMetadataString(metadata, "area");
+  const images: string[] = [];
+
+  const ticket = await db.query.tickets.findFirst({
+    where: eq(tickets.id, sourceId),
+  });
+  const favorited = await db.query.favoritedConversationsKnowledge.findFirst({
+    where: eq(favoritedConversationsKnowledge.ticketId, sourceId),
+  });
+
+  if (ticket) {
+    description = getTextContent(ticket.description as JSONContentZod, 2000);
+    module = ticket.module ?? module;
+    category = ticket.category ?? category;
+    area = ticket.area ?? area;
+    images.push(...extractImageUrls(ticket.description as JSONContentZod));
+
+    const messageIds = favorited?.messageIds;
+    const msgs = await db.query.chatMessages.findMany({
+      where:
+        messageIds && messageIds.length
+          ? and(
+              eq(chatMessages.ticketId, sourceId),
+              inArray(chatMessages.id, messageIds),
+            )
+          : eq(chatMessages.ticketId, sourceId),
+      orderBy: asc(chatMessages.createdAt),
+      with: {
+        sender: basicUserCols,
+      },
+    });
+    conversationText = formatMessagesForAI(
+      msgs.map((m) => ({
+        isInternal: m.isInternal,
+        withdrawn: m.withdrawn,
+        senderId: m.senderId as number | string,
+        createdAt: m.createdAt,
+        content: m.content as JSONContentZod,
+        sender: (m as unknown as { sender?: { role?: string | null } }).sender,
+      })),
+      ticket.customerId as unknown as string | number | null,
+      {
+        perMessageMax: 5000,
+        enumerate: true,
+      },
+    );
+    for (const m of msgs) {
+      if (m?.content) {
+        images.push(...extractImageUrls(m.content as JSONContentZod));
+      }
+    }
+  }
+
+  return { description, conversationText, module, category, area, images };
+}
+
 export async function rebuildEditedKnowledgeMetadata({
   db,
   sourceType,
@@ -333,6 +415,7 @@ export async function rebuildEditedKnowledgeMetadata({
   title,
   metadata,
   chunks,
+  sourceContext,
 }: {
   db: ReturnType<typeof connectDB>;
   sourceType: string;
@@ -340,18 +423,19 @@ export async function rebuildEditedKnowledgeMetadata({
   title: string;
   metadata: Record<string, unknown>;
   chunks: Array<{ chunkId: number; content: string }>;
+  sourceContext?: EditedKnowledgeSourceContext;
 }): Promise<KnowledgeMetadataResult> {
   const editedKnowledgeContent = chunks
     .map((chunk) => `片段 ${chunk.chunkId}:\n${chunk.content}`)
     .join("\n\n");
-  let description = "";
-  let conversationText = editedKnowledgeContent;
-  let module = getMetadataString(metadata, "module");
-  let category = getMetadataString(metadata, "category");
-  let area = getMetadataString(metadata, "area");
-  const images: string[] = [];
+  let description = sourceContext?.description ?? "";
+  let conversationText = sourceContext?.conversationText || editedKnowledgeContent;
+  let module = sourceContext?.module ?? getMetadataString(metadata, "module");
+  let category = sourceContext?.category ?? getMetadataString(metadata, "category");
+  let area = sourceContext?.area ?? getMetadataString(metadata, "area");
+  const images: string[] = sourceContext?.images ? [...sourceContext.images] : [];
 
-  if (sourceType === "favorited_conversation") {
+  if (!sourceContext && sourceType === "favorited_conversation") {
     const ticket = await db.query.tickets.findFirst({
       where: eq(tickets.id, sourceId),
     });

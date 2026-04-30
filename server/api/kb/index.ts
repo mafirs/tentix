@@ -24,7 +24,10 @@ import { HTTPException } from "hono/http-exception";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { logWarning } from "@/utils/log";
 import { OPENAI_CONFIG } from "@/utils/kb/config";
-import { rebuildEditedKnowledgeMetadata } from "@/utils/kb/kb-builder";
+import {
+  loadEditedKnowledgeSourceContext,
+  rebuildEditedKnowledgeMetadata,
+} from "@/utils/kb/kb-builder";
 
 const createFavoritedSchema = z.object({
   ticketId: z.string(),
@@ -123,6 +126,27 @@ async function embedEditedKnowledgeContent(text: string): Promise<string> {
   const input = text.replace(/\s+/g, " ").slice(0, 8000);
   const emb = await editedKnowledgeEmbedder.embedQuery(input);
   return toPgVectorLiteral(emb);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) return;
+        results[index] = await mapper(items[index]!, index);
+      }
+    }),
+  );
+  return results;
 }
 
 function parsePositiveInt(
@@ -565,25 +589,46 @@ const kbRouter = factory
 
       const rebuiltById = new Map<string, Awaited<ReturnType<typeof rebuildEditedKnowledgeMetadata>>>();
       const changedEmbeddingById = new Map<string, string>();
+      const changedEntries = Array.from(changedContentById.entries());
 
-      if (changedContentById.size > 0) {
+      if (changedEntries.length > 0) {
         try {
-          for (const [id, content] of changedContentById) {
-            const row = existingById.get(id)!;
-            const metadata =
-              row.metadata && typeof row.metadata === "object"
-                ? (row.metadata as Record<string, unknown>)
-                : {};
-            const rebuilt = await rebuildEditedKnowledgeMetadata({
-              db,
-              sourceType,
-              sourceId,
-              title: row.title || sourceId,
-              metadata,
-              chunks: [{ chunkId: Number(row.chunkId), content }],
-            });
+          const firstChangedRow = existingById.get(changedEntries[0]![0])!;
+          const firstMetadata =
+            firstChangedRow.metadata && typeof firstChangedRow.metadata === "object"
+              ? (firstChangedRow.metadata as Record<string, unknown>)
+              : {};
+          const sourceContext = await loadEditedKnowledgeSourceContext({
+            db,
+            sourceType,
+            sourceId,
+            metadata: firstMetadata,
+          });
+          const rebuiltChunks = await mapWithConcurrency(
+            changedEntries,
+            2,
+            async ([id, content]) => {
+              const row = existingById.get(id)!;
+              const metadata =
+                row.metadata && typeof row.metadata === "object"
+                  ? (row.metadata as Record<string, unknown>)
+                  : {};
+              const rebuilt = await rebuildEditedKnowledgeMetadata({
+                db,
+                sourceType,
+                sourceId,
+                title: row.title || sourceId,
+                metadata,
+                chunks: [{ chunkId: Number(row.chunkId), content }],
+                sourceContext,
+              });
+              const embedding = await embedEditedKnowledgeContent(content);
+              return { id, rebuilt, embedding };
+            },
+          );
+          for (const { id, rebuilt, embedding } of rebuiltChunks) {
             rebuiltById.set(id, rebuilt);
-            changedEmbeddingById.set(id, await embedEditedKnowledgeContent(content));
+            changedEmbeddingById.set(id, embedding);
           }
         } catch (err) {
           logWarning(`[kb.admin.rebuildChunk] failed source=${sourceType}:${sourceId}: ${String(err)}`);

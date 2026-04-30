@@ -77,6 +77,12 @@ export const myFetch = ky.extend({
   throwHttpErrors: true,
 });
 
+const KB_ADMIN_SAVE_TIMEOUT_MS = 60_000;
+
+export const kbAdminSaveFetch = myFetch.extend({
+  timeout: KB_ADMIN_SAVE_TIMEOUT_MS,
+});
+
 export const apiClient = initClient(import.meta.env.BASE_URL, {
   fetch: myFetch,
 });

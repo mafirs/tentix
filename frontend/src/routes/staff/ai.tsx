@@ -60,7 +60,7 @@ import {
   useQueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { apiClient } from "@lib/api-client";
+import { apiClient, kbAdminSaveFetch } from "@lib/api-client";
 import {
   Search,
   Plus,
@@ -1075,6 +1075,8 @@ function KnowledgeBaseTab() {
       const res = await apiClient.kb.admin.items[":sourceType"][":sourceId"].$patch({
         param: { sourceType, sourceId },
         json: data,
+      }, {
+        fetch: kbAdminSaveFetch,
       });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
