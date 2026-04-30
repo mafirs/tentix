@@ -63,8 +63,6 @@ const knowledgeSourceParamsSchema = z.object({
 
 const knowledgeUpdateSchema = z
   .object({
-    title: z.string().trim().min(1, "标题不能为空").max(500).optional(),
-    isDeleted: z.boolean().optional(),
     chunks: z
       .array(
         z.object({
@@ -75,13 +73,19 @@ const knowledgeUpdateSchema = z
       .optional(),
   })
   .strict()
-  .refine(
-    (value) =>
-      value.title !== undefined ||
-      value.isDeleted !== undefined ||
-      value.chunks !== undefined,
-    { message: "至少提供一个要更新的字段" },
-  );
+  .refine((value) => value.chunks !== undefined, {
+    message: "至少提供一个要更新的片段",
+  });
+
+const knowledgeChunkParamsSchema = z.object({
+  id: z.string().uuid(),
+});
+
+const knowledgeChunkUpdateSchema = z
+  .object({
+    isDeleted: z.boolean(),
+  })
+  .strict();
 
 type KnowledgeListQuery = z.infer<typeof knowledgeListQuerySchema>;
 
@@ -137,7 +141,6 @@ function buildKnowledgeWhere(
 ): SQL | undefined {
   const conditions: SQL[] = [];
   const sourceType = query.sourceType ?? "all";
-  const status = query.status ?? "all";
   const keyword = query.keyword?.trim();
   const module = query.module?.trim();
 
@@ -147,14 +150,6 @@ function buildKnowledgeWhere(
 
   if (module) {
     conditions.push(sql`${schema.knowledgeBase.metadata} ->> 'module' = ${module}`);
-  }
-
-  if (status === "enabled") {
-    conditions.push(eq(schema.knowledgeBase.isDeleted, false));
-  }
-
-  if (status === "disabled") {
-    conditions.push(eq(schema.knowledgeBase.isDeleted, true));
   }
 
   if (failedSourceIds) {
@@ -176,6 +171,14 @@ function buildKnowledgeWhere(
   }
 
   return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+function buildKnowledgeStatusHaving(status: KnowledgeListQuery["status"]): SQL | undefined {
+  const disabledCount = sql<number>`COALESCE(SUM(CASE WHEN ${schema.knowledgeBase.isDeleted} THEN 1 ELSE 0 END), 0)`;
+  const totalCount = sql<number>`COUNT(*)`;
+  if (status === "enabled") return sql`${disabledCount} < ${totalCount}`;
+  if (status === "disabled") return sql`${disabledCount} > 0`;
+  return undefined;
 }
 
 function getMetadataValue(metadata: unknown, key: string): unknown {
@@ -337,6 +340,8 @@ const kbRouter = factory
       }
 
       const whereClause = buildKnowledgeWhere(query, failedSourceIds);
+      const statusHaving = buildKnowledgeStatusHaving(query.status ?? "all");
+      const disabledChunkCount = sql<number>`COALESCE(SUM(CASE WHEN ${schema.knowledgeBase.isDeleted} THEN 1 ELSE 0 END), 0)`;
       const groups =
         failedSourceIds?.length === 0
           ? []
@@ -348,24 +353,27 @@ const kbRouter = factory
                 module: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'module')`,
                 category: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'category')`,
                 chunkCount: count(),
+                disabledChunkCount,
                 accessCount: sql<number>`COALESCE(SUM(${schema.knowledgeBase.accessCount}), 0)`,
-                isDeleted: sql<boolean>`BOOL_OR(${schema.knowledgeBase.isDeleted})`,
+                isDeleted: sql<boolean>`BOOL_AND(${schema.knowledgeBase.isDeleted})`,
                 updatedAt: sql<string>`MAX(${schema.knowledgeBase.updatedAt})`,
               })
               .from(schema.knowledgeBase)
               .where(whereClause)
               .groupBy(schema.knowledgeBase.sourceType, schema.knowledgeBase.sourceId)
+              .having(statusHaving)
               .orderBy(sql`MAX(${schema.knowledgeBase.updatedAt}) DESC`);
 
       const allGroups = await db
         .select({
-          sourceType: schema.knowledgeBase.sourceType,
-          sourceId: schema.knowledgeBase.sourceId,
-          chunkCount: count(),
-          isDeleted: sql<boolean>`BOOL_OR(${schema.knowledgeBase.isDeleted})`,
-        })
-        .from(schema.knowledgeBase)
-        .groupBy(schema.knowledgeBase.sourceType, schema.knowledgeBase.sourceId);
+                sourceType: schema.knowledgeBase.sourceType,
+                sourceId: schema.knowledgeBase.sourceId,
+                chunkCount: count(),
+                disabledChunkCount,
+                isDeleted: sql<boolean>`BOOL_AND(${schema.knowledgeBase.isDeleted})`,
+              })
+              .from(schema.knowledgeBase)
+              .groupBy(schema.knowledgeBase.sourceType, schema.knowledgeBase.sourceId);
 
       const [failedSyncResult] = await db
         .select({ count: count() })
@@ -407,6 +415,7 @@ const kbRouter = factory
             module: row.module ?? "",
             category: row.category ?? "",
             chunkCount: Number(row.chunkCount || 0),
+            disabledChunkCount: Number(row.disabledChunkCount || 0),
             accessCount: Number(row.accessCount || 0),
             isDeleted: Boolean(row.isDeleted),
             updatedAt: row.updatedAt,
@@ -421,8 +430,8 @@ const kbRouter = factory
           totalPages: Math.ceil(groups.length / pageSize),
         },
         summary: {
-          enabledCount: allGroups.filter((row) => !Boolean(row.isDeleted)).length,
-          disabledCount: allGroups.filter((row) => Boolean(row.isDeleted)).length,
+          enabledCount: allGroups.filter((row) => Number(row.disabledChunkCount || 0) < Number(row.chunkCount || 0)).length,
+          disabledCount: allGroups.filter((row) => Number(row.disabledChunkCount || 0) > 0).length,
           chunkCount: allGroups.reduce((sum, row) => sum + Number(row.chunkCount || 0), 0),
           failedSyncCount: Number(failedSyncResult?.count || 0),
         },
@@ -554,126 +563,89 @@ const kbRouter = factory
         changedContentById.set(chunk.id, chunk.content);
       }
 
-      const shouldRebuildMetadata =
-        payload.title !== undefined || changedContentById.size > 0;
-      const nextTitle = payload.title ?? existing[0]?.title ?? "";
-      const nextChunks = existing.map((row) => ({
-        row,
-        content: changedContentById.get(row.id) ?? row.content,
-      }));
-      const baseMetadata =
-        existing[0]?.metadata && typeof existing[0].metadata === "object"
-          ? (existing[0].metadata as Record<string, unknown>)
-          : {};
-      let rebuilt: Awaited<ReturnType<typeof rebuildEditedKnowledgeMetadata>> | null = null;
+      const rebuiltById = new Map<string, Awaited<ReturnType<typeof rebuildEditedKnowledgeMetadata>>>();
       const changedEmbeddingById = new Map<string, string>();
-      const nextContentById = new Map<string, string>();
 
-      if (shouldRebuildMetadata) {
+      if (changedContentById.size > 0) {
         try {
-          rebuilt = await rebuildEditedKnowledgeMetadata({
-            db,
-            sourceType,
-            sourceId,
-            title: nextTitle,
-            metadata: baseMetadata,
-            chunks: nextChunks.map((item) => ({
-              chunkId: Number(item.row.chunkId),
-              content: item.content,
-            })),
-          });
-        } catch (err) {
-          logWarning(`[kb.admin.rebuildMetadata] failed source=${sourceType}:${sourceId}: ${String(err)}`);
-          throw new HTTPException(502, {
-            message: "Failed to rebuild knowledge metadata",
-          });
-        }
-      }
-
-      if (changedContentById.size > 0 || rebuilt?.summaryContent) {
-        try {
-          for (const item of nextChunks) {
-            if (!changedContentById.has(item.row.id)) {
-              if (
-                rebuilt?.summaryContent &&
-                Number(item.row.chunkId) === 0 &&
-                !changedContentById.has(item.row.id) &&
-                item.content !== rebuilt.summaryContent
-              ) {
-                nextContentById.set(item.row.id, rebuilt.summaryContent);
-              } else {
-                continue;
-              }
-            }
-            const content = nextContentById.get(item.row.id) ?? item.content;
-            changedEmbeddingById.set(
-              item.row.id,
-              await embedEditedKnowledgeContent(content),
-            );
+          for (const [id, content] of changedContentById) {
+            const row = existingById.get(id)!;
+            const metadata =
+              row.metadata && typeof row.metadata === "object"
+                ? (row.metadata as Record<string, unknown>)
+                : {};
+            const rebuilt = await rebuildEditedKnowledgeMetadata({
+              db,
+              sourceType,
+              sourceId,
+              title: row.title || sourceId,
+              metadata,
+              chunks: [{ chunkId: Number(row.chunkId), content }],
+            });
+            rebuiltById.set(id, rebuilt);
+            changedEmbeddingById.set(id, await embedEditedKnowledgeContent(content));
           }
         } catch (err) {
-          logWarning(`[kb.admin.embed] failed source=${sourceType}:${sourceId}: ${String(err)}`);
+          logWarning(`[kb.admin.rebuildChunk] failed source=${sourceType}:${sourceId}: ${String(err)}`);
           throw new HTTPException(502, {
-            message: "Failed to rebuild knowledge embedding",
+            message: "Failed to rebuild knowledge chunk",
           });
         }
       }
 
       await db.transaction(async (tx) => {
-        if (shouldRebuildMetadata && rebuilt) {
-          for (const item of nextChunks) {
-            const metadata =
-              item.row.metadata && typeof item.row.metadata === "object"
-                ? (item.row.metadata as Record<string, unknown>)
-                : {};
-            const embedding = changedEmbeddingById.get(item.row.id);
-            const content = nextContentById.get(item.row.id) ?? item.content;
-            const nextMetadata = {
-              ...metadata,
-              problem_summary: rebuilt.metadata.problem_summary,
-              solution_steps: rebuilt.metadata.solution_steps,
-              generated_queries: rebuilt.metadata.generated_queries,
-              tags: rebuilt.metadata.tags,
-            };
-            await tx
-              .update(schema.knowledgeBase)
-              .set({
-                title: nextTitle,
-                metadata: nextMetadata,
-                updatedAt: sql`NOW()`,
-                ...(embedding
-                  ? {
-                      content,
-                      embedding: sql`${embedding}::tentix.vector(3072)`,
-                      contentHash: hashKnowledgeContent({
-                        sourceType,
-                        sourceId,
-                        chunkId: Number(item.row.chunkId),
-                        content,
-                      }),
-                    }
-                  : {}),
-              })
-              .where(eq(schema.knowledgeBase.id, item.row.id));
-          }
-        }
-
-        if (payload.isDeleted !== undefined) {
+        for (const [id, content] of changedContentById) {
+          const row = existingById.get(id)!;
+          const rebuilt = rebuiltById.get(id)!;
+          const metadata =
+            row.metadata && typeof row.metadata === "object"
+              ? (row.metadata as Record<string, unknown>)
+              : {};
           await tx
             .update(schema.knowledgeBase)
             .set({
-              isDeleted: payload.isDeleted,
+              content,
+              metadata: {
+                ...metadata,
+                problem_summary: rebuilt.metadata.problem_summary,
+                solution_steps: rebuilt.metadata.solution_steps,
+                generated_queries: rebuilt.metadata.generated_queries,
+                tags: rebuilt.metadata.tags,
+              },
+              embedding: sql`${changedEmbeddingById.get(id)}::tentix.vector(3072)`,
+              contentHash: hashKnowledgeContent({
+                sourceType,
+                sourceId,
+                chunkId: Number(row.chunkId),
+                content,
+              }),
               updatedAt: sql`NOW()`,
             })
-            .where(
-              and(
-                eq(schema.knowledgeBase.sourceType, sourceType),
-                eq(schema.knowledgeBase.sourceId, sourceId),
-              ),
-            );
+            .where(eq(schema.knowledgeBase.id, id));
         }
       });
 
+      return c.json({ success: true });
+    },
+  )
+  .patch(
+    "/admin/chunks/:id",
+    adminOnlyMiddleware(),
+    zValidator("param", knowledgeChunkParamsSchema),
+    zValidator("json", knowledgeChunkUpdateSchema),
+    async (c) => {
+      const db = c.var.db;
+      const { id } = c.req.valid("param");
+      const payload = c.req.valid("json");
+      const [updated] = await db
+        .update(schema.knowledgeBase)
+        .set({
+          isDeleted: payload.isDeleted,
+          updatedAt: sql`NOW()`,
+        })
+        .where(eq(schema.knowledgeBase.id, id))
+        .returning({ id: schema.knowledgeBase.id });
+      if (!updated) throw new HTTPException(404, { message: "Knowledge chunk not found" });
       return c.json({ success: true });
     },
   )

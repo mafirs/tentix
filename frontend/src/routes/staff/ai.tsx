@@ -70,10 +70,10 @@ import {
   Trash2,
   Camera,
   RefreshCw,
-  AlertTriangle,
   ExternalLink,
   Database,
   Save,
+  Sparkles,
 } from "lucide-react";
 import { uploadAvatar, deleteOldAvatar } from "@utils/avatar-manager";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -150,6 +150,7 @@ type KnowledgeListItem = {
   module: string;
   category: string;
   chunkCount: number;
+  disabledChunkCount: number;
   accessCount: number;
   isDeleted: boolean;
   updatedAt: string;
@@ -214,6 +215,12 @@ const SOURCE_TYPE_LABELS: Record<KnowledgeSourceType, string> = {
   favorited_conversation: "精选案例",
   historical_ticket: "历史工单",
   general_knowledge: "通用知识",
+};
+
+const SOURCE_DOT: Record<KnowledgeSourceType, string> = {
+  favorited_conversation: "bg-orange-500",
+  historical_ticket: "bg-blue-500",
+  general_knowledge: "bg-emerald-500",
 };
 
 function makeKnowledgeKey(item: Pick<KnowledgeListItem, "sourceType" | "sourceId">) {
@@ -1034,11 +1041,9 @@ function KnowledgeBaseTab() {
     enabled: Boolean(selectedItem),
   });
   const detail = detailQuery.data;
-  const [draftTitle, setDraftTitle] = useState("");
   const [draftChunks, setDraftChunks] = useState<KnowledgeChunk[]>([]);
 
   useEffect(() => {
-    setDraftTitle(detail?.title ?? "");
     setDraftChunks(detail?.chunks ?? []);
   }, [detail?.sourceType, detail?.sourceId, detail?.updatedAt]);
 
@@ -1064,8 +1069,6 @@ function KnowledgeBaseTab() {
       sourceType: KnowledgeSourceType;
       sourceId: string;
       data: {
-        title?: string;
-        isDeleted?: boolean;
         chunks?: Array<{ id: string; content: string }>;
       };
     }) => {
@@ -1085,6 +1088,24 @@ function KnowledgeBaseTab() {
         title: getErrorMessage(error, "保存失败"),
         variant: "destructive",
       });
+    },
+  });
+
+  const updateKnowledgeChunkMutation = useMutation({
+    mutationFn: async ({ id, isDeleted }: { id: string; isDeleted: boolean }) => {
+      const res = await apiClient.kb.admin.chunks[":id"].$patch({
+        param: { id },
+        json: { isDeleted },
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(getErrorMessage(errorData, "更新片段状态失败"));
+      }
+      return res.json();
+    },
+    onSuccess: invalidateKnowledgeQueries,
+    onError: (error) => {
+      toast({ title: getErrorMessage(error, "更新片段状态失败"), variant: "destructive" });
     },
   });
 
@@ -1125,16 +1146,11 @@ function KnowledgeBaseTab() {
 
   const handleSave = () => {
     if (!detail) return;
-    const title = draftTitle.trim();
-    if (!title) {
-      toast({ title: "标题不能为空", variant: "destructive" });
-      return;
-    }
     const changedChunks = draftChunks.filter((chunk) => {
       const original = detail.chunks.find((item) => item.id === chunk.id);
       return original && original.content !== chunk.content;
     });
-    if (title === detail.title && changedChunks.length === 0) {
+    if (changedChunks.length === 0) {
       toast({ title: "没有需要保存的改动" });
       return;
     }
@@ -1144,7 +1160,6 @@ function KnowledgeBaseTab() {
         sourceType: detail.sourceType,
         sourceId: detail.sourceId,
         data: {
-          title: title !== detail.title ? title : undefined,
           chunks: changedChunks.length
             ? changedChunks.map((chunk) => ({
                 id: chunk.id,
@@ -1157,15 +1172,10 @@ function KnowledgeBaseTab() {
     );
   };
 
-  const handleToggleDisabled = () => {
-    if (!detail) return;
-    updateKnowledgeMutation.mutate(
-      {
-        sourceType: detail.sourceType,
-        sourceId: detail.sourceId,
-        data: { isDeleted: !detail.isDeleted },
-      },
-      { onSuccess: () => toast({ title: detail.isDeleted ? "已启用" : "已禁用" }) },
+  const handleToggleChunkDisabled = (chunk: KnowledgeChunk) => {
+    updateKnowledgeChunkMutation.mutate(
+      { id: chunk.id, isDeleted: !chunk.isDeleted },
+      { onSuccess: () => toast({ title: chunk.isDeleted ? "已解除禁用" : "已禁用" }) },
     );
   };
 
@@ -1179,12 +1189,14 @@ function KnowledgeBaseTab() {
 
   const summary = listQuery.data?.summary;
   const isMutating =
-    updateKnowledgeMutation.isPending || deleteKnowledgeMutation.isPending;
+    updateKnowledgeMutation.isPending ||
+    updateKnowledgeChunkMutation.isPending ||
+    deleteKnowledgeMutation.isPending;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-lg border border-border bg-background">
-      <div className="border-b border-border px-5 py-4">
-        <div className="mb-4 flex items-start justify-between gap-4">
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-background">
+      <div className="border-b border-border px-6 py-5">
+        <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold">知识库</h2>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -1197,33 +1209,64 @@ function KnowledgeBaseTab() {
           </Button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-5 text-sm">
-          <div>
-            <span className="text-muted-foreground">可用知识</span>
-            <span className="ml-2 font-semibold">{summary?.enabledCount ?? 0}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">知识片段</span>
-            <span className="ml-2 font-semibold">{summary?.chunkCount ?? 0}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">已禁用</span>
-            <span className="ml-2 font-semibold">{summary?.disabledCount ?? 0}</span>
-          </div>
+        <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
+          <div className="grid grid-cols-4 divide-x divide-border">
+            <KbStatCell label="可用知识" value={summary?.enabledCount ?? 0} />
+            <KbStatCell label="知识片段" value={summary?.chunkCount ?? 0} />
+            <button
+              type="button"
+              aria-pressed={status === "disabled"}
+              onClick={() =>
+                setStatus((value) => (value === "disabled" ? "all" : "disabled"))
+              }
+              className={cn(
+                "px-4 py-2.5 text-left transition-colors",
+                status === "disabled" ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+              )}
+            >
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                已禁用
+              </div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-xl font-semibold tabular-nums leading-none">
+                  {summary?.disabledCount ?? 0}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  {status === "disabled" ? "筛选中" : "点击筛选"}
+                </span>
+              </div>
+            </button>
           <button
             type="button"
-            className={cn(
-              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs",
-              failedOnly
-                ? "bg-destructive text-destructive-foreground"
-                : "bg-destructive/10 text-destructive",
-            )}
             onClick={() => setFailedOnly((value) => !value)}
+            className={cn(
+              "px-4 py-2.5 text-left transition-colors",
+              failedOnly ? "bg-destructive/10" : "hover:bg-accent/50",
+            )}
           >
-            <AlertTriangle className="h-3.5 w-3.5" />
-            同步失败
-            <span className="font-semibold">{summary?.failedSyncCount ?? 0}</span>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              同步失败
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span
+                className={cn(
+                  "text-xl font-semibold tabular-nums leading-none",
+                  (summary?.failedSyncCount ?? 0) > 0 && "text-destructive",
+                )}
+              >
+                {summary?.failedSyncCount ?? 0}
+              </span>
+              {(summary?.failedSyncCount ?? 0) === 0 ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  正常
+                </span>
+              ) : (
+                <span className="text-[11px] text-destructive">点击筛选</span>
+              )}
+            </div>
           </button>
+          </div>
         </div>
       </div>
 
@@ -1250,11 +1293,13 @@ function KnowledgeBaseTab() {
         </Select>
         <Select value={module} onValueChange={setModule}>
           <SelectTrigger className="h-9 w-[120px]">
-            <SelectValue placeholder="模块" />
+            <SelectValue placeholder="模块">
+              {module === "all" ? "全部模块" : module}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部模块</SelectItem>
-            {(listQuery.data?.filters.modules ?? []).map((item) => (
+            {(listQuery.data?.filters.modules ?? []).filter((item) => item !== "all").map((item) => (
               <SelectItem key={item} value={item}>
                 {item}
               </SelectItem>
@@ -1286,7 +1331,7 @@ function KnowledgeBaseTab() {
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
-          <div className="min-h-0 overflow-auto border-r border-border p-2">
+          <div className="min-h-0 overflow-auto border-r border-border p-2.5">
             {items.map((item) => {
               const key = makeKnowledgeKey(item);
               const active = key === selectedKey;
@@ -1296,21 +1341,46 @@ function KnowledgeBaseTab() {
                   type="button"
                   onClick={() => setSelectedKey(key)}
                   className={cn(
-                    "mb-1 w-full rounded-md px-3 py-3 text-left text-sm transition-colors",
-                    active ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                    "mb-1 w-full rounded-md border px-3 py-2.5 text-left text-sm transition-colors",
+                    active
+                      ? "border-border bg-accent text-accent-foreground"
+                      : "border-transparent hover:bg-accent/60",
                   )}
                 >
-                  <div className="line-clamp-2 font-medium">{item.title}</div>
-                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{SOURCE_TYPE_LABELS[item.sourceType]}</span>
-                    <span>{item.isDeleted ? "已禁用" : "启用"}</span>
-                    {item.syncFailed ? <span className="text-destructive">同步失败</span> : null}
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
+                        SOURCE_DOT[item.sourceType],
+                      )}
+                    />
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      {SOURCE_TYPE_LABELS[item.sourceType]}
+                    </span>
+                    {item.disabledChunkCount === item.chunkCount && item.chunkCount > 0 ? (
+                      <span className="ml-auto rounded border border-destructive/30 bg-destructive/10 px-1.5 py-px text-[10px] text-destructive">
+                        已禁用
+                      </span>
+                    ) : item.disabledChunkCount > 0 ? (
+                      <span className="ml-auto rounded border border-amber-500/30 bg-amber-50 px-1.5 py-px text-[10px] text-amber-700">
+                        有禁用
+                      </span>
+                    ) : item.syncFailed ? (
+                      <span className="ml-auto text-[11px] text-destructive">同步失败</span>
+                    ) : null}
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {item.module || "未分模块"} · {item.chunkCount} 个知识片段 · {item.accessCount} 次命中
+                  <div className="line-clamp-2 mb-1.5 font-medium leading-snug">
+                    {item.title}
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {formatRelativeFromNow(item.updatedAt)}更新
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
+                    <span>{item.module || "未分模块"}</span>
+                    <span className="text-muted-foreground/50">·</span>
+                    <span>{item.chunkCount} 片段</span>
+                    <span className="text-muted-foreground/50">·</span>
+                    <span>{item.accessCount} 命中</span>
+                    <span className="ml-auto text-muted-foreground/70">
+                      {formatRelativeFromNow(item.updatedAt)}
+                    </span>
                   </div>
                 </button>
               );
@@ -1335,49 +1405,50 @@ function KnowledgeBaseTab() {
                     同步失败。可保存当前内容触发索引重建。
                   </div>
                 ) : null}
-                <div>
-                  <label className="mb-2 block text-xs text-muted-foreground">
-                    标题
-                  </label>
-                  <Input
-                    value={draftTitle}
-                    onChange={(e) => setDraftTitle(e.target.value)}
-                    className="h-10 text-base font-medium"
+                <div className="flex items-center gap-2 text-xs">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      SOURCE_DOT[detail.sourceType],
+                    )}
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">来源：</span>
+                  <span className="text-muted-foreground">
                     {SOURCE_TYPE_LABELS[detail.sourceType]}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">知识 ID：</span>
-                    <span className="font-mono text-xs">{detail.sourceId}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">模块：</span>
-                    {detail.module || "未分模块"}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">分类：</span>
-                    {detail.category || "未分类"}
-                  </div>
+                  </span>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span className="font-mono text-muted-foreground">
+                    {detail.sourceId}
+                  </span>
                   {detail.ticketId ? (
-                    <div className="col-span-2">
-                      <Button variant="ghost" size="sm" asChild className="h-7 px-0">
-                        <Link to="/staff/tickets/$id" params={{ id: detail.ticketId }}>
-                          <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                          打开工单
-                        </Link>
-                      </Button>
-                    </div>
+                    <Button variant="ghost" size="sm" asChild className="ml-auto h-7">
+                      <Link to="/staff/tickets/$id" params={{ id: detail.ticketId }}>
+                        <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                        打开工单
+                      </Link>
+                    </Button>
                   ) : null}
                 </div>
 
+                <div className="text-2xl font-semibold tracking-tight">
+                  {detail.title}
+                </div>
+
+                <div className="grid grid-cols-4 gap-x-6 gap-y-2 border-y border-border py-3">
+                  <KbDetailMeta label="模块" value={detail.module || "未分模块"} />
+                  <KbDetailMeta
+                    label="分类"
+                    value={detail.category || "未分类"}
+                    muted
+                  />
+                  <KbDetailMeta label="片段" value={String(draftChunks.length)} />
+                  <KbDetailMeta label="命中" value={String(detail.accessCount)} />
+                </div>
+
                 {detail.tags.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground">标签：</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="mr-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      标签
+                    </span>
                     {detail.tags.map((tag) => (
                       <Badge key={tag} variant="outline">
                         {tag}
@@ -1396,8 +1467,38 @@ function KnowledgeBaseTab() {
                   <div className="space-y-4">
                     {draftChunks.map((chunk, index) => (
                       <div key={chunk.id} className="space-y-2">
-                        <div className="text-xs text-muted-foreground">
-                          {chunk.chunkId === 0 ? "AI 摘要" : `原始内容 ${index}`}
+                        <div className="flex items-center gap-2">
+                          {chunk.chunkId === 0 ? (
+                            <Badge
+                              variant="outline"
+                              className="gap-1 border-orange-500/30 bg-orange-50 text-orange-700"
+                            >
+                              <Sparkles className="h-3 w-3" />
+                              AI 摘要
+                            </Badge>
+                          ) : (
+                            <span className="text-xs font-medium text-muted-foreground">
+                              原始内容 {index}
+                            </span>
+                          )}
+                          {chunk.isDeleted ? (
+                            <Badge
+                              variant="outline"
+                              className="border-destructive/30 bg-destructive/10 text-destructive"
+                            >
+                              已禁用
+                            </Badge>
+                          ) : null}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="ml-auto h-7"
+                            onClick={() => handleToggleChunkDisabled(chunk)}
+                            disabled={isMutating}
+                          >
+                            {chunk.isDeleted ? "解除禁用" : "禁用"}
+                          </Button>
                         </div>
                         <Textarea
                           value={chunk.content}
@@ -1410,7 +1511,10 @@ function KnowledgeBaseTab() {
                               ),
                             )
                           }
-                          className="min-h-[130px] resize-y text-sm leading-6"
+                          className={cn(
+                            "min-h-[130px] resize-y text-sm leading-6",
+                            chunk.isDeleted && "border-destructive/30 bg-destructive/5",
+                          )}
                         />
                       </div>
                     ))}
@@ -1418,16 +1522,9 @@ function KnowledgeBaseTab() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Button onClick={handleSave} disabled={isMutating}>
+                  <Button onClick={handleSave} disabled={isMutating} className="shadow-sm">
                     <Save className="mr-2 h-4 w-4" />
                     保存并重建索引
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleToggleDisabled}
-                    disabled={isMutating}
-                  >
-                    {detail.isDeleted ? "启用" : "禁用"}
                   </Button>
                   <Button
                     variant="ghost"
@@ -1473,6 +1570,58 @@ function KnowledgeBaseTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function KbStatCell({
+  label,
+  value,
+  muted,
+}: {
+  label: string;
+  value: number;
+  muted?: boolean;
+}) {
+  return (
+    <div className="px-4 py-2.5">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-1 text-xl font-semibold tabular-nums leading-none",
+          muted && "text-muted-foreground",
+        )}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function KbDetailMeta({
+  label,
+  value,
+  muted,
+}: {
+  label: string;
+  value: string;
+  muted?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 text-sm font-medium",
+          muted && "text-muted-foreground",
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }
