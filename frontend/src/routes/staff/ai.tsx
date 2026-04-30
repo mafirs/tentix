@@ -141,6 +141,8 @@ type KnowledgeListFilters = {
   module: string;
   status: KnowledgeStatusFilter;
   failedOnly: boolean;
+  page: number;
+  pageSize: number;
 };
 
 type KnowledgeListItem = {
@@ -234,8 +236,8 @@ const knowledgeBaseQueryOptions = (filters: KnowledgeListFilters) => {
     queryFn: async (): Promise<KnowledgeListResponse> => {
       const res = await apiClient.kb.admin.items.$get({
         query: {
-          page: "1",
-          pageSize: "50",
+          page: String(filters.page),
+          pageSize: String(filters.pageSize),
           keyword: normalized || undefined,
           sourceType: filters.sourceType === "all" ? undefined : filters.sourceType,
           module: filters.module === "all" ? undefined : filters.module,
@@ -1009,11 +1011,17 @@ function KnowledgeBaseTab() {
   const [module, setModule] = useState("all");
   const [status, setStatus] = useState<KnowledgeStatusFilter>("all");
   const [failedOnly, setFailedOnly] = useState(false);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+  const [selectedKnowledge, setSelectedKnowledge] = useState<Pick<KnowledgeListItem, "sourceType" | "sourceId"> | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const resetListPage = useCallback(() => {
+    setPage(1);
+  }, []);
   const resetStatusFilters = useCallback(() => {
     setStatus("all");
     setFailedOnly(false);
+    setPage(1);
   }, []);
   const filters = useMemo(
     () => ({
@@ -1022,27 +1030,39 @@ function KnowledgeBaseTab() {
       module,
       status,
       failedOnly,
+      page,
+      pageSize,
     }),
-    [debouncedKeyword, sourceType, module, status, failedOnly],
+    [debouncedKeyword, sourceType, module, status, failedOnly, page, pageSize],
   );
   const listQuery = useQuery(knowledgeBaseQueryOptions(filters));
   const items = listQuery.data?.items ?? [];
+  const pagination = listQuery.data?.pagination;
+  const currentPage = pagination?.page ?? page;
+  const totalPages = Math.max(1, pagination?.totalPages ?? 1);
+  const canGoPrevious = currentPage > 1;
+  const canGoNext = currentPage < totalPages;
 
   useEffect(() => {
-    if (!items.length) {
-      setSelectedKey(null);
+    if (!pagination || items.length > 0 || pagination.total === 0 || page <= 1) {
       return;
     }
-    if (!selectedKey || !items.some((item) => makeKnowledgeKey(item) === selectedKey)) {
-      setSelectedKey(makeKnowledgeKey(items[0]!));
-    }
-  }, [items, selectedKey]);
+    setPage(Math.max(1, pagination.totalPages));
+  }, [items.length, page, pagination]);
 
-  const selectedItem =
-    items.find((item) => makeKnowledgeKey(item) === selectedKey) ?? null;
+  useEffect(() => {
+    if (!selectedKnowledge && items.length) {
+      const first = items[0]!;
+      setSelectedKnowledge({
+        sourceType: first.sourceType,
+        sourceId: first.sourceId,
+      });
+    }
+  }, [items, selectedKnowledge]);
+
   const detailQuery = useQuery({
-    ...knowledgeDetailQueryOptions(selectedItem?.sourceType, selectedItem?.sourceId),
-    enabled: Boolean(selectedItem),
+    ...knowledgeDetailQueryOptions(selectedKnowledge?.sourceType, selectedKnowledge?.sourceId),
+    enabled: Boolean(selectedKnowledge),
   });
   const detail = detailQuery.data;
   const [draftChunks, setDraftChunks] = useState<KnowledgeChunk[]>([]);
@@ -1053,16 +1073,16 @@ function KnowledgeBaseTab() {
 
   const invalidateKnowledgeQueries = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
-    if (selectedItem) {
+    if (selectedKnowledge) {
       queryClient.invalidateQueries({
         queryKey: [
           "admin-knowledge-base-detail",
-          selectedItem.sourceType,
-          selectedItem.sourceId,
+          selectedKnowledge.sourceType,
+          selectedKnowledge.sourceId,
         ],
       });
     }
-  }, [queryClient, selectedItem]);
+  }, [queryClient, selectedKnowledge]);
 
   const updateKnowledgeMutation = useMutation({
     mutationFn: async ({
@@ -1134,7 +1154,7 @@ function KnowledgeBaseTab() {
     },
     onSuccess: () => {
       setDeleteDialogOpen(false);
-      setSelectedKey(null);
+      setSelectedKnowledge(null);
       toast({ title: "已删除" });
       queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
     },
@@ -1230,9 +1250,11 @@ function KnowledgeBaseTab() {
             <button
               type="button"
               aria-pressed={status === "disabled"}
-              onClick={() =>
-                setStatus((value) => (value === "disabled" ? "all" : "disabled"))
-              }
+              onClick={() => {
+                setStatus((value) => (value === "disabled" ? "all" : "disabled"));
+                setPage(1);
+                setSelectedKnowledge(null);
+              }}
               className={cn(
                 "px-4 py-2.5 text-left transition-colors",
                 status === "disabled" ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
@@ -1252,7 +1274,11 @@ function KnowledgeBaseTab() {
             </button>
           <button
             type="button"
-            onClick={() => setFailedOnly((value) => !value)}
+            onClick={() => {
+              setFailedOnly((value) => !value);
+              setPage(1);
+              setSelectedKnowledge(null);
+            }}
             className={cn(
               "px-4 py-2.5 text-left transition-colors",
               failedOnly ? "bg-destructive/10" : "hover:bg-accent/50",
@@ -1289,12 +1315,23 @@ function KnowledgeBaseTab() {
           <Input
             placeholder="搜索标题、内容、标签、知识 ID、工单 ID..."
             value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
+            onChange={(e) => {
+              setKeyword(e.target.value);
+              resetListPage();
+              setSelectedKnowledge(null);
+            }}
             className="h-9 pl-9"
           />
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         </div>
-        <Select value={sourceType} onValueChange={(value) => setSourceType(value as KnowledgeListFilters["sourceType"])}>
+        <Select
+          value={sourceType}
+          onValueChange={(value) => {
+            setSourceType(value as KnowledgeListFilters["sourceType"]);
+            resetListPage();
+            setSelectedKnowledge(null);
+          }}
+        >
           <SelectTrigger className="h-9 w-[120px]">
             <SelectValue placeholder="来源" />
           </SelectTrigger>
@@ -1305,7 +1342,14 @@ function KnowledgeBaseTab() {
             <SelectItem value="general_knowledge">通用知识</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={module} onValueChange={setModule}>
+        <Select
+          value={module}
+          onValueChange={(value) => {
+            setModule(value);
+            resetListPage();
+            setSelectedKnowledge(null);
+          }}
+        >
           <SelectTrigger className="h-9 w-[120px]">
             <SelectValue placeholder="模块">
               {module === "all" ? "全部模块" : module}
@@ -1320,7 +1364,14 @@ function KnowledgeBaseTab() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={status} onValueChange={(value) => setStatus(value as KnowledgeStatusFilter)}>
+        <Select
+          value={status}
+          onValueChange={(value) => {
+            setStatus(value as KnowledgeStatusFilter);
+            resetListPage();
+            setSelectedKnowledge(null);
+          }}
+        >
           <SelectTrigger className="h-9 w-[120px]">
             <SelectValue placeholder="状态" />
           </SelectTrigger>
@@ -1345,22 +1396,30 @@ function KnowledgeBaseTab() {
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)]">
-          <div className="min-h-0 overflow-auto border-r border-border p-2.5">
-            {items.map((item) => {
-              const key = makeKnowledgeKey(item);
-              const active = key === selectedKey;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setSelectedKey(key)}
-                  className={cn(
-                    "mb-1 w-full rounded-md border px-3 py-2.5 text-left text-sm transition-colors",
-                    active
-                      ? "border-border bg-accent text-accent-foreground"
-                      : "border-transparent hover:bg-accent/60",
-                  )}
-                >
+          <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] border-r border-border">
+            <div className="min-h-0 overflow-auto p-2.5">
+              {items.map((item) => {
+                const key = makeKnowledgeKey(item);
+                const active = selectedKnowledge
+                  ? key === makeKnowledgeKey(selectedKnowledge)
+                  : false;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() =>
+                      setSelectedKnowledge({
+                        sourceType: item.sourceType,
+                        sourceId: item.sourceId,
+                      })
+                    }
+                    className={cn(
+                      "mb-1 w-full rounded-md border px-3 py-2.5 text-left text-sm transition-colors",
+                      active
+                        ? "border-border bg-accent text-accent-foreground"
+                        : "border-transparent hover:bg-accent/60",
+                    )}
+                  >
                   <div className="mb-1.5 flex items-center gap-2">
                     <span
                       className={cn(
@@ -1396,13 +1455,39 @@ function KnowledgeBaseTab() {
                       {formatRelativeFromNow(item.updatedAt)}
                     </span>
                   </div>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+              <span>
+                共 {pagination?.total ?? 0} 条 · 第 {currentPage} / {totalPages} 页
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={!canGoPrevious || listQuery.isFetching}
+                  onClick={() => setPage((value) => Math.max(1, value - 1))}
+                >
+                  上一页
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={!canGoNext || listQuery.isFetching}
+                  onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+                >
+                  下一页
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="min-h-0 overflow-auto p-5">
-            {!selectedItem ? (
+            {!selectedKnowledge ? (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                 请选择一条知识
               </div>
