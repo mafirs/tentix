@@ -61,7 +61,7 @@ import {
   useQueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { apiClient, kbAdminSaveFetch } from "@lib/api-client";
+import { apiClient, kbAdminImportFetch, kbAdminSaveFetch } from "@lib/api-client";
 import {
   Search,
   Plus,
@@ -75,6 +75,7 @@ import {
   Database,
   Save,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import { uploadAvatar, deleteOldAvatar } from "@utils/avatar-manager";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -147,6 +148,18 @@ function createManualGeneralKnowledgeEntrySlug(): string {
     .slice(0, 80);
 }
 
+function createMarkdownImportSourceDocId(docName: string): string {
+  const base = docName
+    .replace(/\.[^.]+$/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const suffix = Date.now().toString(36);
+  return `${base || "markdown"}-${suffix}`.slice(0, 80);
+}
+
 const createGeneralKnowledgeFormSchema = z.object({
   entrySlug: generalKnowledgeSourcePartSchema,
   title: z.string().trim().min(1, "标题不能为空").max(200),
@@ -164,6 +177,70 @@ const createGeneralKnowledgeFormSchema = z.object({
 type CreateGeneralKnowledgeFormData = z.infer<
   typeof createGeneralKnowledgeFormSchema
 >;
+
+const markdownGeneralKnowledgeImportFormSchema = z.object({
+  docName: z.string().trim().min(1, "文档名不能为空").max(200),
+  sourceDocId: generalKnowledgeSourcePartSchema,
+  revision: z.string().trim().min(1, "版本不能为空").max(80),
+  markdown: z.string().trim().min(1, "Markdown 内容不能为空").max(120000),
+});
+
+type MarkdownGeneralKnowledgeImportFormData = z.infer<
+  typeof markdownGeneralKnowledgeImportFormSchema
+>;
+
+type GeneralKnowledgeCategory =
+  (typeof GENERAL_KNOWLEDGE_CATEGORY_VALUES)[number];
+
+type GeneralKnowledgeCreatePayload = {
+  sourceId: string;
+  title: string;
+  modules: string[];
+  category: GeneralKnowledgeCategory;
+  docName?: string;
+  revision: string;
+  content: string;
+  indexes?: string[];
+};
+
+type MarkdownGeneralKnowledgeDraft = {
+  draftId: string;
+  entrySlug: string;
+  titlePath: string;
+  sourceExcerpt: string;
+  title: string;
+  modules: string[];
+  category: GeneralKnowledgeCategory;
+  content: string;
+  indexes: string[];
+  warnings: string[];
+  imported?: boolean;
+};
+
+type MarkdownGeneralKnowledgeDraftResponse = {
+  success: boolean;
+  data: {
+    sourceDocId: string;
+    docName: string;
+    revision: string;
+    totalCandidates: number;
+    generatedCandidates: number;
+    skippedCandidates: number;
+    truncated: boolean;
+    maxCandidates: number;
+    items: MarkdownGeneralKnowledgeDraft[];
+  };
+};
+
+function getDefaultMarkdownImportFormValues(): MarkdownGeneralKnowledgeImportFormData {
+  const docName = "markdown-import.md";
+  return {
+    docName,
+    sourceDocId: createMarkdownImportSourceDocId(docName),
+    revision: `markdown-${new Date().toISOString().slice(0, 10)}`,
+    markdown: "",
+  };
+}
 
 function getDefaultGeneralKnowledgeFormValues(): CreateGeneralKnowledgeFormData {
   return {
@@ -366,23 +443,19 @@ const knowledgeDetailQueryOptions = (
     },
   });
 
-async function createGeneralKnowledge(
-  data: CreateGeneralKnowledgeFormData,
+async function createGeneralKnowledgePayload(
+  data: GeneralKnowledgeCreatePayload,
 ): Promise<{ success: boolean; data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number } }> {
-  const indexes = [data.index1, data.index2, data.index3]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
-  const sourceId = buildGeneralKnowledgeSourceId(data);
   const res = await apiClient.kb.admin["general-knowledge"].$post({
     json: {
-      sourceId,
+      sourceId: data.sourceId,
       title: data.title.trim(),
       modules: data.modules,
       category: data.category,
-      docName: MANUAL_GENERAL_KNOWLEDGE_DOC_NAME,
-      revision: getManualGeneralKnowledgeRevision(),
+      docName: data.docName?.trim() || undefined,
+      revision: data.revision.trim(),
       content: data.content.trim(),
-      indexes: indexes.length ? indexes : undefined,
+      indexes: data.indexes?.length ? data.indexes : undefined,
     },
   });
   if (!res.ok) {
@@ -393,6 +466,51 @@ async function createGeneralKnowledge(
     success: boolean;
     data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number };
   };
+}
+
+async function createGeneralKnowledge(
+  data: CreateGeneralKnowledgeFormData,
+): Promise<{ success: boolean; data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number } }> {
+  const indexes = [data.index1, data.index2, data.index3]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return createGeneralKnowledgePayload({
+    sourceId: buildGeneralKnowledgeSourceId(data),
+    title: data.title,
+    modules: data.modules,
+    category: data.category,
+    docName: MANUAL_GENERAL_KNOWLEDGE_DOC_NAME,
+    revision: getManualGeneralKnowledgeRevision(),
+    content: data.content,
+    indexes,
+  });
+}
+
+async function createGeneralKnowledgeDraftsFromMarkdown({
+  data,
+  moduleOptions,
+}: {
+  data: MarkdownGeneralKnowledgeImportFormData;
+  moduleOptions: Array<{ code: string; label: string }>;
+}): Promise<MarkdownGeneralKnowledgeDraftResponse> {
+  const res = await kbAdminImportFetch.post(
+    "/api/kb/admin/general-knowledge/draft-from-markdown",
+    {
+      json: {
+        markdown: data.markdown.trim(),
+        docName: data.docName.trim(),
+        sourceDocId: data.sourceDocId.trim(),
+        revision: data.revision.trim(),
+        moduleOptions: moduleOptions.map((item) => item.code),
+        maxCandidates: 10,
+      },
+    },
+  );
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(getErrorMessage(errorData, "生成通用知识草稿失败"));
+  }
+  return (await res.json()) as MarkdownGeneralKnowledgeDraftResponse;
 }
 
 // 为列表图标提供一组可选的 Tailwind 色系（文本+浅色背景）
@@ -1144,10 +1262,28 @@ function KnowledgeBaseTab() {
   const [selectedKnowledge, setSelectedKnowledge] = useState<Pick<KnowledgeListItem, "sourceType" | "sourceId"> | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [markdownImportDialogOpen, setMarkdownImportDialogOpen] = useState(false);
+  const [markdownDrafts, setMarkdownDrafts] = useState<MarkdownGeneralKnowledgeDraft[]>([]);
+  const [markdownImportMeta, setMarkdownImportMeta] = useState<{
+    sourceDocId: string;
+    docName: string;
+    revision: string;
+  } | null>(null);
+  const [markdownImportSummary, setMarkdownImportSummary] = useState<{
+    totalCandidates: number;
+    generatedCandidates: number;
+    skippedCandidates: number;
+    truncated: boolean;
+    maxCandidates: number;
+  } | null>(null);
   const ticketModules = useTicketModules();
   const createKnowledgeForm = useForm<CreateGeneralKnowledgeFormData>({
     resolver: zodResolver(createGeneralKnowledgeFormSchema),
     defaultValues: getDefaultGeneralKnowledgeFormValues(),
+  });
+  const markdownImportForm = useForm<MarkdownGeneralKnowledgeImportFormData>({
+    resolver: zodResolver(markdownGeneralKnowledgeImportFormSchema),
+    defaultValues: getDefaultMarkdownImportFormValues(),
   });
   const moduleOptions = useMemo(
     () =>
@@ -1342,6 +1478,85 @@ function KnowledgeBaseTab() {
     },
   });
 
+  const markdownImportMutation = useMutation({
+    mutationFn: (values: MarkdownGeneralKnowledgeImportFormData) =>
+      createGeneralKnowledgeDraftsFromMarkdown({
+        data: values,
+        moduleOptions,
+      }),
+    onSuccess: (result) => {
+      setMarkdownImportMeta({
+        sourceDocId: result.data.sourceDocId,
+        docName: result.data.docName,
+        revision: result.data.revision,
+      });
+      setMarkdownImportSummary({
+        totalCandidates: result.data.totalCandidates,
+        generatedCandidates: result.data.generatedCandidates,
+        skippedCandidates: result.data.skippedCandidates,
+        truncated: result.data.truncated,
+        maxCandidates: result.data.maxCandidates,
+      });
+      setMarkdownDrafts(result.data.items);
+      toast({
+        title: result.data.truncated
+          ? `已生成前 ${result.data.generatedCandidates} 条草稿，共 ${result.data.totalCandidates} 条`
+          : `已生成 ${result.data.generatedCandidates} 条草稿`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "生成通用知识草稿失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const approveMarkdownDraftMutation = useMutation({
+    mutationFn: (draft: MarkdownGeneralKnowledgeDraft) => {
+      if (!markdownImportMeta) {
+        throw new Error("缺少导入批次信息");
+      }
+      return createGeneralKnowledgePayload({
+        sourceId: `general_knowledge:${markdownImportMeta.sourceDocId}:${draft.entrySlug}`,
+        title: draft.title,
+        modules: draft.modules,
+        category: draft.category,
+        docName: markdownImportMeta.docName,
+        revision: markdownImportMeta.revision,
+        content: draft.content,
+        indexes: draft.indexes,
+      });
+    },
+    onSuccess: (_result, draft) => {
+      setMarkdownDrafts((items) =>
+        items.map((item) =>
+          item.draftId === draft.draftId ? { ...item, imported: true } : item,
+        ),
+      );
+      setSourceType("general_knowledge");
+      setModule("all");
+      setStatus("all");
+      setFailedOnly(false);
+      setKeyword("");
+      setPage(1);
+      setSelectedKnowledge({
+        sourceType: "general_knowledge",
+        sourceId: markdownImportMeta
+          ? `general_knowledge:${markdownImportMeta.sourceDocId}:${draft.entrySlug}`
+          : buildGeneralKnowledgeSourceId({ entrySlug: draft.entrySlug }),
+      });
+      queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
+      toast({ title: "草稿已入库" });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "草稿入库失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefresh = () => {
     invalidateKnowledgeQueries();
   };
@@ -1356,6 +1571,47 @@ function KnowledgeBaseTab() {
   const handleCreateGeneralKnowledge = (values: CreateGeneralKnowledgeFormData) => {
     createGeneralKnowledgeMutation.mutate(values);
   };
+
+  const handleMarkdownImportDialogOpenChange = (open: boolean) => {
+    setMarkdownImportDialogOpen(open);
+    if (!open) {
+      markdownImportForm.reset(getDefaultMarkdownImportFormValues());
+      setMarkdownDrafts([]);
+      setMarkdownImportMeta(null);
+      setMarkdownImportSummary(null);
+    }
+  };
+
+  const handleMarkdownFileChange = async (file: File | undefined) => {
+    if (!file) return;
+    const markdown = await file.text();
+    markdownImportForm.setValue("docName", file.name, { shouldValidate: true });
+    markdownImportForm.setValue("sourceDocId", createMarkdownImportSourceDocId(file.name), {
+      shouldValidate: true,
+    });
+    markdownImportForm.setValue("revision", `markdown-${new Date().toISOString().slice(0, 10)}`, {
+      shouldValidate: true,
+    });
+    markdownImportForm.setValue("markdown", markdown, { shouldValidate: true });
+  };
+
+  const handleMarkdownDraftChange = (
+    draftId: string,
+    patch: Partial<MarkdownGeneralKnowledgeDraft>,
+  ) => {
+    setMarkdownDrafts((items) =>
+      items.map((item) => (item.draftId === draftId ? { ...item, ...patch } : item)),
+    );
+  };
+
+  const canApproveMarkdownDraft = (draft: MarkdownGeneralKnowledgeDraft) =>
+    Boolean(
+      draft.title.trim() &&
+        draft.modules.length > 0 &&
+        draft.category &&
+        draft.content.trim() &&
+        !draft.imported,
+    );
 
   const handleSave = () => {
     if (!detail) return;
@@ -1426,6 +1682,14 @@ function KnowledgeBaseTab() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMarkdownImportDialogOpen(true)}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              导入 Markdown
+            </Button>
             <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
               添加通用知识
@@ -1537,7 +1801,7 @@ function KnowledgeBaseTab() {
                       <FormControl>
                         <Textarea
                           placeholder="填写会返回给 AI 的正式知识内容"
-                          className="min-h-[180px]"
+                          className="min-h-[180px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
                           {...field}
                         />
                       </FormControl>
@@ -1577,6 +1841,209 @@ function KnowledgeBaseTab() {
                 </DialogFooter>
               </form>
             </Form>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={markdownImportDialogOpen}
+          onOpenChange={handleMarkdownImportDialogOpenChange}
+        >
+          <DialogContent className="max-h-[94vh] w-[min(98vw,88rem)] max-w-none overflow-y-auto sm:max-w-none">
+            <DialogHeader>
+              <DialogTitle>导入 Markdown</DialogTitle>
+            </DialogHeader>
+            <Form {...markdownImportForm}>
+              <form
+                className="space-y-5"
+                onSubmit={markdownImportForm.handleSubmit((values) =>
+                  markdownImportMutation.mutate(values),
+                )}
+              >
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField
+                    control={markdownImportForm.control}
+                    name="docName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>文档名</FormLabel>
+                        <FormControl>
+                          <Input placeholder="troubleshooting.md" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className="space-y-2">
+                    <FormLabel>Markdown 文件</FormLabel>
+                    <Input
+                      type="file"
+                      accept=".md,.markdown,text/markdown,text/plain"
+                      onChange={(event) => handleMarkdownFileChange(event.target.files?.[0])}
+                    />
+                  </div>
+                </div>
+                <FormField
+                  control={markdownImportForm.control}
+                  name="markdown"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Markdown 内容</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="选择文件后会自动填充，也可以直接粘贴 Markdown"
+                          className="min-h-[180px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <DialogFooter>
+                  <Button
+                    type="submit"
+                    disabled={markdownImportMutation.isPending}
+                  >
+                    {markdownImportMutation.isPending ? "生成中" : "生成草稿"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </Form>
+
+            {markdownDrafts.length > 0 ? (
+              <div className="space-y-4 border-t border-border pt-5">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">待确认草稿</div>
+                  {markdownImportSummary ? (
+                    <div
+                      className={
+                        markdownImportSummary.truncated
+                          ? "rounded-md border border-amber-500/30 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                          : "text-xs text-muted-foreground"
+                      }
+                    >
+                      {markdownImportSummary.truncated
+                        ? `共识别 ${markdownImportSummary.totalCandidates} 条候选，本次只生成前 ${markdownImportSummary.generatedCandidates} 条，还有 ${markdownImportSummary.skippedCandidates} 条未处理。请拆分文档后再导入剩余内容。`
+                        : `共识别并生成 ${markdownImportSummary.generatedCandidates} 条候选。`}
+                    </div>
+                  ) : null}
+                </div>
+                {markdownDrafts.map((draft) => (
+                  <div
+                    key={draft.draftId}
+                    className="space-y-3 rounded-md border border-border p-4"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {draft.titlePath}
+                        </div>
+                        {draft.warnings.length ? (
+                          <div className="mt-1 text-xs text-amber-700">
+                            {draft.warnings.join("；")}
+                          </div>
+                        ) : null}
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={
+                          !canApproveMarkdownDraft(draft) ||
+                          approveMarkdownDraftMutation.isPending
+                        }
+                        onClick={() => approveMarkdownDraftMutation.mutate(draft)}
+                      >
+                        {draft.imported ? "已入库" : "确认入库"}
+                      </Button>
+                    </div>
+                    <Input
+                      value={draft.title}
+                      onChange={(event) =>
+                        handleMarkdownDraftChange(draft.draftId, {
+                          title: event.target.value,
+                        })
+                      }
+                      placeholder="标题"
+                    />
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Select
+                        value={draft.category}
+                        onValueChange={(value) =>
+                          handleMarkdownDraftChange(draft.draftId, {
+                            category: value as GeneralKnowledgeCategory,
+                          })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="分类" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {GENERAL_KNOWLEDGE_CATEGORY_LABELS[value]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="grid max-h-32 gap-2 overflow-auto rounded-md border border-border p-3">
+                        {moduleOptions.map((item) => {
+                          const checked = draft.modules.includes(item.code);
+                          return (
+                            <label
+                              key={item.code}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(value) => {
+                                  const nextChecked = value === true;
+                                  handleMarkdownDraftChange(draft.draftId, {
+                                    modules: nextChecked
+                                      ? Array.from(new Set([...draft.modules, item.code]))
+                                      : draft.modules.filter((module) => module !== item.code),
+                                  });
+                                }}
+                              />
+                              <span>{item.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <Textarea
+                      value={draft.content}
+                      onChange={(event) =>
+                        handleMarkdownDraftChange(draft.draftId, {
+                          content: event.target.value,
+                        })
+                      }
+                      className="min-h-[140px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
+                    />
+                    <div className="grid gap-2">
+                      {[0, 1, 2].map((index) => (
+                        <Input
+                          key={index}
+                          value={draft.indexes[index] ?? ""}
+                          placeholder={`召回索引 ${index + 1}`}
+                          onChange={(event) => {
+                            const indexes = [...draft.indexes];
+                            indexes[index] = event.target.value;
+                            handleMarkdownDraftChange(draft.draftId, {
+                              indexes: indexes.map((item) => item.trim()).filter(Boolean).slice(0, 3),
+                            });
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <details className="text-xs text-muted-foreground">
+                      <summary>原始片段</summary>
+                      <pre className="mt-2 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] rounded-md bg-muted p-3">
+                        {draft.sourceExcerpt}
+                      </pre>
+                    </details>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </DialogContent>
         </Dialog>
 

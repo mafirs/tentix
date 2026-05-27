@@ -22,7 +22,7 @@ import {
 } from "../middleware.ts";
 import { emit, Events } from "@/utils/events/kb/bus";
 import { HTTPException } from "hono/http-exception";
-import { OpenAIEmbeddings } from "@langchain/openai";
+import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { logWarning } from "@/utils/log";
 import { OPENAI_CONFIG, SOURCE_WEIGHTS } from "@/utils/kb/config";
 import {
@@ -94,6 +94,32 @@ const generalKnowledgeCategoryValues = [
   "other",
 ] as const;
 
+const generalKnowledgeSourcePartSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+const markdownGeneralKnowledgeDraftSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  modules: z.array(z.string().trim().min(1).max(80)).max(10),
+  category: z.enum(generalKnowledgeCategoryValues),
+  content: z.string().trim().min(1).max(20000),
+  indexes: z.array(z.string().trim().min(1).max(500)).max(3),
+});
+
+const createGeneralKnowledgeDraftFromMarkdownSchema = z
+  .object({
+    markdown: z.string().trim().min(1, "Markdown 内容不能为空").max(120000),
+    docName: z.string().trim().min(1, "文档名不能为空").max(200),
+    sourceDocId: generalKnowledgeSourcePartSchema,
+    revision: z.string().trim().min(1, "版本不能为空").max(80),
+    moduleOptions: z.array(z.string().trim().min(1).max(80)).max(80).optional(),
+    maxCandidates: z.number().int().min(1).max(20).optional(),
+  })
+  .strict();
+
 const createGeneralKnowledgeSchema = z
   .object({
     sourceId: z
@@ -126,6 +152,34 @@ const createGeneralKnowledgeResponseSchema = z.object({
     sourceType: z.literal("general_knowledge"),
     sourceId: z.string(),
     chunkCount: z.number(),
+  }),
+});
+
+const createGeneralKnowledgeDraftFromMarkdownResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    sourceDocId: z.string(),
+    docName: z.string(),
+    revision: z.string(),
+    totalCandidates: z.number(),
+    generatedCandidates: z.number(),
+    skippedCandidates: z.number(),
+    truncated: z.boolean(),
+    maxCandidates: z.number(),
+    items: z.array(
+      z.object({
+        draftId: z.string(),
+        entrySlug: z.string(),
+        titlePath: z.string(),
+        sourceExcerpt: z.string(),
+        title: z.string(),
+        modules: z.array(z.string()),
+        category: z.enum(generalKnowledgeCategoryValues),
+        content: z.string(),
+        indexes: z.array(z.string()),
+        warnings: z.array(z.string()),
+      }),
+    ),
   }),
 });
 
@@ -284,6 +338,195 @@ function normalizeStringList(values: string[] | undefined): string[] {
   return Array.from(
     new Set((values ?? []).map((item) => item.trim()).filter(Boolean)),
   );
+}
+
+function normalizeSourcePart(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return normalized || fallback;
+}
+
+function makeStableSuffix(value: string): string {
+  return Bun.hash(value).toString(36).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8);
+}
+
+type MarkdownImportCandidate = {
+  draftId: string;
+  entrySlug: string;
+  titlePath: string;
+  sourceExcerpt: string;
+};
+
+type MarkdownImportSplitResult = {
+  candidates: MarkdownImportCandidate[];
+  totalCandidates: number;
+  generatedCandidates: number;
+  skippedCandidates: number;
+  truncated: boolean;
+  maxCandidates: number;
+};
+
+function collectMarkdownHeadings(lines: string[]): Array<{
+  level: number;
+  title: string;
+  lineIndex: number;
+}> {
+  return lines.flatMap((line, lineIndex) => {
+    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (!match?.[1] || !match?.[2]) return [];
+    return [{ level: match[1].length, title: match[2].trim(), lineIndex }];
+  });
+}
+
+function buildTitlePath(
+  headings: Array<{ level: number; title: string; lineIndex: number }>,
+  currentIndex: number,
+): string {
+  const stack: Array<{ level: number; title: string }> = [];
+  for (const heading of headings) {
+    if (heading.lineIndex > currentIndex) break;
+    while (stack.length && stack[stack.length - 1]!.level >= heading.level) {
+      stack.pop();
+    }
+    stack.push({ level: heading.level, title: heading.title });
+  }
+  return stack.map((item) => item.title).join(" > ");
+}
+
+function splitMarkdownImportCandidates(
+  markdown: string,
+  maxCandidates: number,
+): MarkdownImportSplitResult {
+  const normalized = markdown.replace(/\r\n?/g, "\n").trim();
+  const lines = normalized.split("\n");
+  const headings = collectMarkdownHeadings(lines);
+  if (headings.length === 0) {
+    return {
+      candidates: [
+        {
+          draftId: "draft-1",
+          entrySlug: `entry-1-${makeStableSuffix(normalized)}`,
+          titlePath: "未命名文档",
+          sourceExcerpt: normalized.slice(0, 20000),
+        },
+      ],
+      totalCandidates: 1,
+      generatedCandidates: 1,
+      skippedCandidates: 0,
+      truncated: false,
+      maxCandidates,
+    };
+  }
+
+  const boundaryLevel = headings.some((heading) => heading.level === 2)
+    ? 2
+    : Math.min(...headings.map((heading) => heading.level));
+  const allBoundaries = headings.filter((heading) => heading.level === boundaryLevel);
+  const boundaries = allBoundaries.slice(0, maxCandidates);
+  const totalCandidates = allBoundaries.length;
+  const skippedCandidates = Math.max(0, totalCandidates - boundaries.length);
+
+  return {
+    totalCandidates,
+    generatedCandidates: boundaries.length,
+    skippedCandidates,
+    truncated: skippedCandidates > 0,
+    maxCandidates,
+    candidates: boundaries.map((heading, index) => {
+      const next = headings.find(
+        (item) => item.lineIndex > heading.lineIndex && item.level === boundaryLevel,
+      );
+      const sourceExcerpt = lines
+        .slice(heading.lineIndex, next?.lineIndex ?? lines.length)
+        .join("\n")
+        .trim();
+      const titlePath = buildTitlePath(headings, heading.lineIndex) || heading.title;
+      const slugBase = normalizeSourcePart(titlePath, `entry-${index + 1}`);
+      return {
+        draftId: `draft-${index + 1}`,
+        entrySlug: `${slugBase}-${makeStableSuffix(titlePath)}`.slice(0, 80),
+        titlePath,
+        sourceExcerpt: sourceExcerpt.slice(0, 20000),
+      };
+    }),
+  };
+}
+
+function normalizeGeneratedModules(
+  modules: string[],
+  allowedModules: string[],
+): string[] {
+  const normalized = normalizeStringList(modules).slice(0, 10);
+  if (allowedModules.length === 0) return normalized;
+  const allowed = new Set(allowedModules);
+  return normalized.filter((item) => allowed.has(item));
+}
+
+async function structureMarkdownGeneralKnowledgeCandidate({
+  candidate,
+  allowedModules,
+}: {
+  candidate: MarkdownImportCandidate;
+  allowedModules: string[];
+}): Promise<MarkdownImportCandidate & z.infer<typeof markdownGeneralKnowledgeDraftSchema> & { warnings: string[] }> {
+  const fallbackTitle = candidate.titlePath.split(" > ").pop() || candidate.titlePath;
+  try {
+    const model = new ChatOpenAI({
+      apiKey: OPENAI_CONFIG.apiKey,
+      model: OPENAI_CONFIG.summaryModel,
+      configuration: {
+        baseURL: OPENAI_CONFIG.baseURL,
+      },
+    });
+    const structured = model.withStructuredOutput(markdownGeneralKnowledgeDraftSchema);
+    const result = await structured.invoke([
+      "请把以下 Markdown 片段结构化为一条通用知识草稿，只输出符合 schema 的结构化结果。",
+      "",
+      "必须遵守：",
+      "1) 不新增原文没有的事实，不擅自补充解决方案。",
+      "2) content 可以整理表达，但只能来自原文事实。",
+      "3) indexes 只写用户可能的问法，最多 3 条，不写解决方案。",
+      "4) category 只能是 troubleshooting / feature / billing / operation / other。",
+      allowedModules.length
+        ? `5) modules 只能从这些模块代码中选择：${allowedModules.join(", ")}。不确定时返回空数组。`
+        : "5) modules 不确定时返回空数组。",
+      "",
+      `标题路径：${candidate.titlePath}`,
+      "",
+      "原始 Markdown 片段：",
+      candidate.sourceExcerpt.slice(0, 12000),
+    ].join("\n"));
+    const modules = normalizeGeneratedModules(result.modules, allowedModules);
+    const indexes = normalizeStringList(result.indexes).slice(0, 3);
+    const warnings = [
+      modules.length === 0 ? "未生成适用模块，请人工选择" : "",
+      !result.content.trim() ? "未生成正式知识正文，请人工补充" : "",
+    ].filter(Boolean);
+    return {
+      ...candidate,
+      title: result.title.trim() || fallbackTitle,
+      modules,
+      category: result.category,
+      content: result.content.trim() || candidate.sourceExcerpt,
+      indexes,
+      warnings,
+    };
+  } catch (err) {
+    logWarning(`General knowledge Markdown draft generation failed: ${String(err)}`);
+    return {
+      ...candidate,
+      title: fallbackTitle,
+      modules: [],
+      category: "other",
+      content: candidate.sourceExcerpt,
+      indexes: [],
+      warnings: ["AI 结构化失败，已保留原始片段作为正文"],
+    };
+  }
 }
 
 function parseGeneralKnowledgeSourceId(sourceId: string): {
@@ -608,6 +851,54 @@ const kbRouter = factory
           sourceType: "general_knowledge",
           sourceId,
           chunkCount: rows.length,
+        },
+      });
+    },
+  )
+  .post(
+    "/admin/general-knowledge/draft-from-markdown",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Generate in-memory general knowledge drafts from Markdown",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: {
+          description: "General knowledge drafts generated successfully",
+          content: {
+            "application/json": {
+              schema: resolver(createGeneralKnowledgeDraftFromMarkdownResponseSchema),
+            },
+          },
+        },
+      },
+    }),
+    zValidator("json", createGeneralKnowledgeDraftFromMarkdownSchema),
+    async (c) => {
+      const payload = c.req.valid("json");
+      const allowedModules = normalizeStringList(payload.moduleOptions);
+      const splitResult = splitMarkdownImportCandidates(
+        payload.markdown,
+        payload.maxCandidates ?? 10,
+      );
+      const items = await mapWithConcurrency(splitResult.candidates, 2, (candidate) =>
+        structureMarkdownGeneralKnowledgeCandidate({
+          candidate,
+          allowedModules,
+        }),
+      );
+      return c.json({
+        success: true,
+        data: {
+          sourceDocId: payload.sourceDocId,
+          docName: payload.docName,
+          revision: payload.revision,
+          totalCandidates: splitResult.totalCandidates,
+          generatedCandidates: splitResult.generatedCandidates,
+          skippedCandidates: splitResult.skippedCandidates,
+          truncated: splitResult.truncated,
+          maxCandidates: splitResult.maxCandidates,
+          items,
         },
       });
     },
