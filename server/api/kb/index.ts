@@ -24,7 +24,7 @@ import { emit, Events } from "@/utils/events/kb/bus";
 import { HTTPException } from "hono/http-exception";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { logWarning } from "@/utils/log";
-import { OPENAI_CONFIG } from "@/utils/kb/config";
+import { OPENAI_CONFIG, SOURCE_WEIGHTS } from "@/utils/kb/config";
 import {
   loadEditedKnowledgeSourceContext,
   rebuildEditedKnowledgeMetadata,
@@ -82,6 +82,37 @@ const knowledgeUpdateSchema = z
   .refine((value) => value.chunks !== undefined, {
     message: "至少提供一个要更新的片段",
   });
+
+const createGeneralKnowledgeSchema = z
+  .object({
+    sourceId: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]+$/, "知识 ID 只能包含英文、数字、下划线和连字符")
+      .max(120)
+      .optional(),
+    title: z.string().trim().min(1, "标题不能为空").max(200),
+    modules: z
+      .array(z.string().trim().min(1).max(80))
+      .min(1, "至少选择一个模块")
+      .max(10, "模块数量不能超过 10 个"),
+    category: z.string().trim().min(1, "分类不能为空").max(80),
+    content: z.string().trim().min(1, "正文不能为空").max(20000),
+    indexes: z
+      .array(z.string().trim().min(1).max(500))
+      .max(3, "召回索引最多 3 条")
+      .optional(),
+  })
+  .strict();
+
+const createGeneralKnowledgeResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    sourceType: z.literal("general_knowledge"),
+    sourceId: z.string(),
+    chunkCount: z.number(),
+  }),
+});
 
 const knowledgeChunkParamsSchema = z.object({
   id: z.string().uuid(),
@@ -176,7 +207,16 @@ function buildKnowledgeWhere(
   }
 
   if (module) {
-    conditions.push(sql`${schema.knowledgeBase.metadata} ->> 'module' = ${module}`);
+    conditions.push(sql`(
+      (${schema.knowledgeBase.sourceType} <> 'general_knowledge'
+        AND ${schema.knowledgeBase.metadata} ->> 'module' = ${module})
+      OR
+      (${schema.knowledgeBase.sourceType} = 'general_knowledge'
+        AND (
+          ${schema.knowledgeBase.metadata} ->> 'module' = ${module}
+          OR (${schema.knowledgeBase.metadata} -> 'modules') ? ${module}
+        ))
+    )`);
   }
 
   if (failedSourceIds) {
@@ -223,6 +263,12 @@ function getMetadataStringArray(metadata: unknown, key: string): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function normalizeStringList(values: string[] | undefined): string[] {
+  return Array.from(
+    new Set((values ?? []).map((item) => item.trim()).filter(Boolean)),
+  );
 }
 
 function getUserDisplayName(user: {
@@ -420,6 +466,119 @@ const kbRouter = factory
       });
     },
   )
+  .post(
+    "/admin/general-knowledge",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Create or replace one general knowledge source",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: {
+          description: "General knowledge imported successfully",
+          content: {
+            "application/json": {
+              schema: resolver(createGeneralKnowledgeResponseSchema),
+            },
+          },
+        },
+      },
+    }),
+    zValidator("json", createGeneralKnowledgeSchema),
+    async (c) => {
+      const db = c.var.db;
+      const payload = c.req.valid("json");
+      const sourceId = payload.sourceId || crypto.randomUUID();
+      const modules = normalizeStringList(payload.modules);
+      const indexes = normalizeStringList(payload.indexes).slice(0, 3);
+      const primaryModule = modules[0]!;
+      const commonMetadata = {
+        module: primaryModule,
+        modules,
+        category: payload.category,
+        entry_title: payload.title,
+        review_status: "approved",
+        parent_chunk_id: 0,
+      };
+      const docs = [
+        {
+          chunkId: 0,
+          title: payload.title,
+          content: payload.content,
+          metadata: {
+            ...commonMetadata,
+            is_summary: true,
+            chunk_role: "content",
+            generated_indexes: indexes,
+          },
+        },
+        ...indexes.map((content, index) => ({
+          chunkId: index + 1,
+          title: `${payload.title}（召回索引）`,
+          content,
+          metadata: {
+            ...commonMetadata,
+            is_summary: false,
+            chunk_role: "index",
+          },
+        })),
+      ];
+
+      const rows = await mapWithConcurrency(docs, 2, async (doc) => {
+        const embedding = await embedEditedKnowledgeContent(doc.content);
+        return {
+          sourceType: "general_knowledge" as const,
+          sourceId,
+          chunkId: doc.chunkId,
+          title: doc.title,
+          content: doc.content,
+          embedding,
+          metadata: doc.metadata,
+          contentHash: hashKnowledgeContent({
+            sourceType: "general_knowledge",
+            sourceId,
+            chunkId: doc.chunkId,
+            content: doc.content,
+          }),
+          score: Math.round((SOURCE_WEIGHTS.general_knowledge ?? 0.5) * 100),
+        };
+      });
+
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(schema.knowledgeBase)
+          .where(
+            and(
+              eq(schema.knowledgeBase.sourceType, "general_knowledge"),
+              eq(schema.knowledgeBase.sourceId, sourceId),
+            ),
+          );
+
+        await tx.insert(schema.knowledgeBase).values(
+          rows.map((row) => ({
+            sourceType: row.sourceType,
+            sourceId: row.sourceId,
+            chunkId: row.chunkId,
+            title: row.title,
+            content: row.content,
+            embedding: sql`${row.embedding}::tentix.vector(3072)`,
+            metadata: row.metadata,
+            contentHash: row.contentHash,
+            score: row.score,
+          })),
+        );
+      });
+
+      return c.json({
+        success: true,
+        data: {
+          sourceType: "general_knowledge",
+          sourceId,
+          chunkCount: rows.length,
+        },
+      });
+    },
+  )
   .get(
     "/admin/items",
     adminOnlyMiddleware(),
@@ -554,14 +713,23 @@ const kbRouter = factory
         .from(schema.favoritedConversationsKnowledge)
         .where(eq(schema.favoritedConversationsKnowledge.syncStatus, "failed"));
 
-      const moduleRows = await db
-        .select({
-          module: sql<string>`${schema.knowledgeBase.metadata} ->> 'module'`,
-        })
-        .from(schema.knowledgeBase)
-        .where(sql`NULLIF(${schema.knowledgeBase.metadata} ->> 'module', '') IS NOT NULL`)
-        .groupBy(sql`${schema.knowledgeBase.metadata} ->> 'module'`)
-        .orderBy(sql`${schema.knowledgeBase.metadata} ->> 'module'`);
+      const moduleRowsResult = await db.execute(sql`
+        SELECT DISTINCT module
+        FROM (
+          SELECT NULLIF(metadata ->> 'module', '') AS module
+          FROM tentix.knowledge_base
+          WHERE NULLIF(metadata ->> 'module', '') IS NOT NULL
+          UNION
+          SELECT NULLIF(jsonb_array_elements_text(metadata -> 'modules'), '') AS module
+          FROM tentix.knowledge_base
+          WHERE jsonb_typeof(metadata -> 'modules') = 'array'
+        ) modules
+        WHERE module IS NOT NULL
+        ORDER BY module
+      `);
+      const moduleRows = Array.isArray(moduleRowsResult)
+        ? moduleRowsResult
+        : moduleRowsResult.rows;
 
       const pageGroups = groups.slice(offset, offset + pageSize);
       const favoriteSourceIds = pageGroups
@@ -610,7 +778,7 @@ const kbRouter = factory
           failedSyncCount: Number(failedSyncResult?.count || 0),
         },
         filters: {
-          modules: moduleRows.map((row) => row.module).filter(Boolean),
+          modules: moduleRows.map((row) => String(row.module)).filter(Boolean),
         },
       });
     },
@@ -747,6 +915,11 @@ const kbRouter = factory
       const db = c.var.db;
       const { sourceType, sourceId } = c.req.valid("param");
       const payload = c.req.valid("json");
+      if (sourceType === "general_knowledge") {
+        throw new HTTPException(400, {
+          message: "General knowledge updates should use the import endpoint",
+        });
+      }
       const existing = await db
         .select()
         .from(schema.knowledgeBase)

@@ -123,7 +123,16 @@ export class PgVectorStore implements VectorStore {
       }
       if (filters?.module) {
         conditions.push(
-          sql`(${knowledgeBase.metadata} ->> 'module') = ${filters.module}`,
+          sql`(
+            (${knowledgeBase.sourceType} <> 'general_knowledge'
+              AND ${knowledgeBase.metadata} ->> 'module' = ${filters.module})
+            OR
+            (${knowledgeBase.sourceType} = 'general_knowledge'
+              AND (
+                ${knowledgeBase.metadata} ->> 'module' = ${filters.module}
+                OR (${knowledgeBase.metadata} -> 'modules') ? ${filters.module}
+              ))
+          )`,
         );
       }
 

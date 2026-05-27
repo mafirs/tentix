@@ -247,9 +247,10 @@ export async function ragNode(
       }
     }
 
-    const sorted: Array<SearchHit & { finalScore: number }> = Array.from(
+    const sortedBeforeCollapse: Array<SearchHit & { finalScore: number }> = Array.from(
       merged.values(),
     ).sort((a, b) => b.finalScore - a.finalScore);
+    const sorted = collapseGeneralKnowledgeHits(sortedBeforeCollapse);
 
     // 多样性约束
     const MAX_PER_SOURCE = 2;
@@ -285,9 +286,13 @@ export async function ragNode(
     retrievedContext = expandedTop;
 
     // 在合并去重后，统一更新访问次数，确保每个 chunk 在一次对话中只计数一次
-    // 使用 trimmedTop（去重后的最终结果）而非 expandedTop
+    // 通用知识命中 index 时，按最终返回给模型的 chunk_id=0 计数
+    const accessCountHits = expandedTop.filter((hit) => {
+      if (hit.source_type === "general_knowledge") return hit.chunk_id === 0;
+      return trimmedTop.some((original) => original.id === hit.id);
+    });
     const finalChunkIds = Array.from(
-      new Set(trimmedTop.map((hit) => hit.id)),
+      new Set(accessCountHits.map((hit) => hit.id)),
     ).filter(Boolean);
 
     if (finalChunkIds.length > 0) {
@@ -332,6 +337,31 @@ async function expandDialogResults(
     const source_type: string = source_typeRaw ?? "";
     const source_id: string = source_idRaw ?? "";
     const isDialog = DIALOG_SOURCES.has(source_type);
+    if (source_type === "general_knowledge") {
+      const contentHit = list.find((x) => x.chunk_id === 0);
+      if (contentHit) {
+        expanded.push(contentHit);
+        continue;
+      }
+
+      if (typeof store.getBySource !== "function" || !source_id) {
+        continue;
+      }
+
+      try {
+        const chunks = await store.getBySource({
+          source_type,
+          source_id,
+        });
+        const parent = chunks.find((x) => x.chunk_id === 0);
+        if (parent) {
+          expanded.push(parent);
+        }
+      } catch {
+        continue;
+      }
+      continue;
+    }
     if (!isDialog) {
       const first = list[0];
       if (first) expanded.push(first);
@@ -413,4 +443,25 @@ async function expandDialogResults(
   const uniq = new Map<string, SearchHit>();
   for (const h of expanded) uniq.set(h.id, h);
   return Array.from(uniq.values()).slice(0, 7);
+}
+
+function collapseGeneralKnowledgeHits<T extends SearchHit & { finalScore: number }>(
+  hits: T[],
+): T[] {
+  const result: T[] = [];
+  const seenGeneralSources = new Set<string>();
+
+  for (const hit of hits) {
+    if (hit.source_type !== "general_knowledge" || !hit.source_id) {
+      result.push(hit);
+      continue;
+    }
+
+    const key = `${hit.source_type}:${hit.source_id}`;
+    if (seenGeneralSources.has(key)) continue;
+    seenGeneralSources.add(key);
+    result.push(hit);
+  }
+
+  return result;
 }
