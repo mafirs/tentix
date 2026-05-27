@@ -83,20 +83,35 @@ const knowledgeUpdateSchema = z
     message: "至少提供一个要更新的片段",
   });
 
+const generalKnowledgeSourceIdRegex =
+  /^general_knowledge:([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)$/;
+
+const generalKnowledgeCategoryValues = [
+  "troubleshooting",
+  "feature",
+  "billing",
+  "operation",
+  "other",
+] as const;
+
 const createGeneralKnowledgeSchema = z
   .object({
     sourceId: z
       .string()
       .trim()
-      .regex(/^[A-Za-z0-9_-]+$/, "知识 ID 只能包含英文、数字、下划线和连字符")
-      .max(120)
-      .optional(),
+      .regex(
+        generalKnowledgeSourceIdRegex,
+        "知识 ID 格式应为 general_knowledge:{source_doc_id}:{entry_slug}",
+      )
+      .max(200),
     title: z.string().trim().min(1, "标题不能为空").max(200),
     modules: z
       .array(z.string().trim().min(1).max(80))
       .min(1, "至少选择一个模块")
       .max(10, "模块数量不能超过 10 个"),
-    category: z.string().trim().min(1, "分类不能为空").max(80),
+    category: z.enum(generalKnowledgeCategoryValues),
+    docName: z.string().trim().max(200).optional(),
+    revision: z.string().trim().min(1, "版本不能为空").max(80),
     content: z.string().trim().min(1, "正文不能为空").max(20000),
     indexes: z
       .array(z.string().trim().min(1).max(500))
@@ -269,6 +284,19 @@ function normalizeStringList(values: string[] | undefined): string[] {
   return Array.from(
     new Set((values ?? []).map((item) => item.trim()).filter(Boolean)),
   );
+}
+
+function parseGeneralKnowledgeSourceId(sourceId: string): {
+  sourceDocId: string;
+  entrySlug: string;
+} {
+  const match = generalKnowledgeSourceIdRegex.exec(sourceId);
+  if (!match?.[1] || !match?.[2]) {
+    throw new HTTPException(400, {
+      message: "Invalid general knowledge sourceId",
+    });
+  }
+  return { sourceDocId: match[1], entrySlug: match[2] };
 }
 
 function getUserDisplayName(user: {
@@ -488,7 +516,8 @@ const kbRouter = factory
     async (c) => {
       const db = c.var.db;
       const payload = c.req.valid("json");
-      const sourceId = payload.sourceId || crypto.randomUUID();
+      const sourceId = payload.sourceId;
+      const { sourceDocId, entrySlug } = parseGeneralKnowledgeSourceId(sourceId);
       const modules = normalizeStringList(payload.modules);
       const indexes = normalizeStringList(payload.indexes).slice(0, 3);
       const primaryModule = modules[0]!;
@@ -496,6 +525,10 @@ const kbRouter = factory
         module: primaryModule,
         modules,
         category: payload.category,
+        source_doc_id: sourceDocId,
+        entry_slug: entrySlug,
+        doc_name: payload.docName ?? "",
+        revision: payload.revision,
         entry_title: payload.title,
         review_status: "approved",
         parent_chunk_id: 0,

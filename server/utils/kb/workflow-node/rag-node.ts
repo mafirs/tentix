@@ -259,7 +259,7 @@ export async function ragNode(
     const top: Array<SearchHit & { finalScore: number }> = [];
 
     for (const h of sorted) {
-      const key = `${h.source_type}:${h.source_id ?? ""}`;
+      const key = JSON.stringify([h.source_type, h.source_id ?? ""]);
       const cnt = perSourceCount.get(key) ?? 0;
       if (cnt >= MAX_PER_SOURCE) continue;
       top.push(h);
@@ -323,19 +323,24 @@ async function expandDialogResults(
     "favorited_conversation",
     "historical_ticket",
   ]);
-  const bySource = new Map<string, SearchHit[]>();
+  const bySource = new Map<
+    string,
+    { source_type: string; source_id: string; hits: SearchHit[] }
+  >();
   for (const h of hits) {
-    const key = `${h.source_type}:${h.source_id ?? ""}`;
-    const list = bySource.get(key) ?? [];
-    list.push(h);
-    bySource.set(key, list);
+    const source_type = h.source_type;
+    const source_id = h.source_id ?? "";
+    const key = JSON.stringify([source_type, source_id]);
+    const group = bySource.get(key);
+    if (group) {
+      group.hits.push(h);
+    } else {
+      bySource.set(key, { source_type, source_id, hits: [h] });
+    }
   }
 
   const expanded: SearchHit[] = [];
-  for (const [key, list] of bySource.entries()) {
-    const [source_typeRaw, source_idRaw] = key.split(":");
-    const source_type: string = source_typeRaw ?? "";
-    const source_id: string = source_idRaw ?? "";
+  for (const { source_type, source_id, hits: list } of bySource.values()) {
     const isDialog = DIALOG_SOURCES.has(source_type);
     if (source_type === "general_knowledge") {
       const contentHit = list.find((x) => x.chunk_id === 0);
@@ -457,7 +462,7 @@ function collapseGeneralKnowledgeHits<T extends SearchHit & { finalScore: number
       continue;
     }
 
-    const key = `${hit.source_type}:${hit.source_id}`;
+    const key = JSON.stringify([hit.source_type, hit.source_id]);
     if (seenGeneralSources.has(key)) continue;
     seenGeneralSources.add(key);
     result.push(hit);

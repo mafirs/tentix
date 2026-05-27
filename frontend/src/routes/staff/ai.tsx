@@ -1189,6 +1189,13 @@ function KnowledgeBaseTab() {
 
   const handleSave = () => {
     if (!detail) return;
+    if (detail.sourceType === "general_knowledge") {
+      toast({
+        title: "通用知识请通过导入接口覆盖更新",
+        variant: "destructive",
+      });
+      return;
+    }
     const changedChunks = draftChunks.filter((chunk) => {
       const original = detail.chunks.find((item) => item.id === chunk.id);
       return original && original.content !== chunk.content;
@@ -1232,6 +1239,7 @@ function KnowledgeBaseTab() {
 
   const summary = listQuery.data?.summary;
   const isFailureView = Boolean(failedOnly && detail?.syncFailed);
+  const isGeneralKnowledgeDetail = detail?.sourceType === "general_knowledge";
   const isMutating =
     updateKnowledgeMutation.isPending ||
     updateKnowledgeChunkMutation.isPending ||
@@ -1607,14 +1615,23 @@ function KnowledgeBaseTab() {
                     <div className="mb-3 flex items-center justify-between">
                       <div className="text-sm font-medium">内容片段</div>
                       <div className="text-xs text-muted-foreground">
-                        未点击保存前不会写入数据库
+                        {isGeneralKnowledgeDetail
+                          ? "通用知识通过导入接口覆盖更新"
+                          : "未点击保存前不会写入数据库"}
                       </div>
                     </div>
                     <div className="space-y-4">
                       {draftChunks.map((chunk, index) => (
                         <div key={chunk.id} className="space-y-2">
                           <div className="flex items-center gap-2">
-                            {chunk.chunkId === 0 ? (
+                            {detail.sourceType === "general_knowledge" ? (
+                              <Badge
+                                variant="outline"
+                                className="border-emerald-500/30 bg-emerald-50 text-emerald-700"
+                              >
+                                {chunk.chunkId === 0 ? "正式知识" : "召回索引"}
+                              </Badge>
+                            ) : chunk.chunkId === 0 ? (
                               <Badge
                                 variant="outline"
                                 className="gap-1 border-orange-500/30 bg-orange-50 text-orange-700"
@@ -1648,6 +1665,7 @@ function KnowledgeBaseTab() {
                           </div>
                           <Textarea
                             value={chunk.content}
+                            readOnly={isGeneralKnowledgeDetail}
                             onChange={(e) =>
                               setDraftChunks((prev) =>
                                 prev.map((item) =>
@@ -1660,6 +1678,7 @@ function KnowledgeBaseTab() {
                             className={cn(
                               "min-h-[130px] resize-y text-sm leading-6",
                               chunk.isDeleted && "border-destructive/30 bg-destructive/5",
+                              isGeneralKnowledgeDetail && "bg-muted/40",
                             )}
                           />
                         </div>
@@ -1669,7 +1688,7 @@ function KnowledgeBaseTab() {
                 )}
 
                 <div className="flex items-center gap-2">
-                  {isFailureView ? null : (
+                  {isFailureView || isGeneralKnowledgeDetail ? null : (
                     <Button onClick={handleSave} disabled={isMutating} className="shadow-sm">
                       <Save className="mr-2 h-4 w-4" />
                       保存并重建索引
