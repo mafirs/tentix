@@ -78,15 +78,10 @@ export const myFetch = ky.extend({
 });
 
 const KB_ADMIN_SAVE_TIMEOUT_MS = 60_000;
-const KB_ADMIN_IMPORT_TIMEOUT_MS = 180_000;
 const HOT_ISSUES_ANALYTICS_TIMEOUT_MS = 90_000;
 
 export const kbAdminSaveFetch = myFetch.extend({
   timeout: KB_ADMIN_SAVE_TIMEOUT_MS,
-});
-
-export const kbAdminImportFetch = myFetch.extend({
-  timeout: KB_ADMIN_IMPORT_TIMEOUT_MS,
 });
 
 export const hotIssuesAnalyticsFetch = myFetch.extend({
