@@ -13,24 +13,41 @@ export async function findAndMarkCustomerReplyPendingTickets(
       : 10;
 
   const res = await db.execute(sql`
-    WITH latest_messages AS (
-      SELECT DISTINCT ON (ticket_id)
-        ticket_id,
-        sender_id,
-        created_at,
-        id
-      FROM tentix.chat_messages
-      ORDER BY ticket_id, created_at DESC, id DESC
+    WITH ticket_message_state AS (
+      SELECT
+        t.id AS ticket_id,
+        MAX(cm.created_at) FILTER (
+          WHERE cm.sender_id = t.customer_id
+        ) AS last_customer_message_at,
+        MAX(cm.created_at) FILTER (
+          WHERE cm.sender_id = t.agent_id
+            OR EXISTS (
+              SELECT 1
+              FROM tentix.technicians_to_tickets tt
+              WHERE tt.ticket_id = t.id
+                AND tt.user_id = cm.sender_id
+            )
+        ) AS last_member_reply_at
+      FROM tentix.tickets t
+      LEFT JOIN tentix.chat_messages cm ON (
+        cm.ticket_id = t.id
+        AND cm.is_internal = false
+        AND cm.withdrawn = false
+      )
+      WHERE t.status = 'in_progress'
+      GROUP BY t.id, t.customer_id, t.agent_id
     ),
     eligible_tickets AS (
       SELECT t.id
       FROM tentix.tickets t
-      JOIN latest_messages lm ON t.id = lm.ticket_id
-      JOIN tentix.users sender ON sender.id = lm.sender_id
+      JOIN ticket_message_state tms ON t.id = tms.ticket_id
       WHERE t.status = 'in_progress'
-        AND lm.sender_id = t.customer_id
-        AND sender.role = 'customer'
-        AND lm.created_at <= NOW() - (${safeTimeoutMinutes} * INTERVAL '1 minute')
+        AND tms.last_customer_message_at IS NOT NULL
+        AND tms.last_customer_message_at <= NOW() - (${safeTimeoutMinutes} * INTERVAL '1 minute')
+        AND (
+          tms.last_member_reply_at IS NULL
+          OR tms.last_member_reply_at < tms.last_customer_message_at
+        )
         AND NOT EXISTS (
           SELECT 1
           FROM tentix.ticket_history th
