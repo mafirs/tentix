@@ -172,13 +172,13 @@ export function StaffChat({ ticket, token, isTicketLoading }: StaffChatProps) {
   }, [messages, userId]);
 
   // Send read status when messages come into view
-  const handleMessageInView = (messageId: number) => {
+  const handleMessageInView = async (messageId: number) => {
     if (
       isTicketMember &&
       unreadMessages.has(messageId) &&
       !sentReadStatusRef.current.has(messageId)
     ) {
-      const readStatusSent = sendReadStatus(messageId);
+      const readStatusSent = await sendReadStatus(messageId);
       if (!readStatusSent) {
         return;
       }

@@ -136,11 +136,12 @@ async function getFilteredTicketIdsByStaffReadStatus(
 async function getFilteredTicketIdsByReadStatus(
   readStatus: "read" | "unread",
   currentUserId: number,
+  includeInternalMessages = true,
 ) {
   const db = connectDB();
 
   // 1. 使用子查询和窗口函数，为每个工单的所有消息按时间倒序排名
-  const latestMessageSubquery = db
+  const latestMessageQuery = db
     .select({
       id: schema.chatMessages.id,
       ticketId: schema.chatMessages.ticketId,
@@ -149,7 +150,12 @@ async function getFilteredTicketIdsByReadStatus(
         "rn",
       ),
     })
-    .from(schema.chatMessages)
+    .from(schema.chatMessages);
+
+  const latestMessageSubquery = (includeInternalMessages
+    ? latestMessageQuery
+    : latestMessageQuery.where(eq(schema.chatMessages.isInternal, false))
+  )
     .as("latest_messages");
 
   // 2. 构建查询的主体，包括 JOIN
@@ -305,6 +311,7 @@ async function getTicketsWithPagination(
     const readStatusTicketIds = await getFilteredTicketIdsByReadStatus(
       readStatus,
       userId,
+      role !== "customer",
     );
     // 如果没有匹配的工单，可以直接返回空，避免后续查询
     if (readStatusTicketIds.length === 0) {
@@ -345,6 +352,7 @@ async function getTicketsWithPagination(
         agent: basicUserCols,
         customer: basicUserCols,
         messages: {
+          where: (messages, { eq }) => eq(messages.isInternal, false),
           orderBy: [desc(schema.chatMessages.createdAt)],
           limit: 1,
           with: {

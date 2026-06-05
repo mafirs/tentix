@@ -34,7 +34,7 @@ interface UseTicketWebSocketReturn {
     isInternal?: boolean,
   ) => Promise<void>;
   sendTypingIndicator: () => void;
-  sendReadStatus: (messageId: number) => boolean;
+  sendReadStatus: (messageId: number) => Promise<boolean>;
   closeConnection: () => void;
   sendCustomMsg: (props: wsMsgClientType) => void;
   withdrawMessage: (messageId: number) => void;
@@ -577,14 +577,11 @@ export function useTicketWebSocket({
 
   // 发送已读状态
   const sendReadStatus = useCallback(
-    (messageId: number) => {
-      const readAt = new Date().toISOString();
-      if (wsRef.current?.readyState !== WebSocket.OPEN) {
-        return false;
-      }
-
+    async (messageId: number) => {
       try {
-        wsRef.current.send(
+        const ws = await ensureConnected();
+        const readAt = new Date().toISOString();
+        ws.send(
           JSON.stringify({
             type: "message_read",
             userId,
@@ -602,7 +599,7 @@ export function useTicketWebSocket({
         return false;
       }
     },
-    [userId, readMessage, queryClient, onError],
+    [ensureConnected, userId, readMessage, queryClient, onError],
   );
 
   // 撤回消息

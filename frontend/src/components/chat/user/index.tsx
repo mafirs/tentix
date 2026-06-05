@@ -133,13 +133,15 @@ export function UserChat({
   }, [messages, userId]);
 
   // Send read status when messages come into view
-  const handleMessageInView = (messageId: number) => {
+  const handleMessageInView = async (messageId: number) => {
     if (
       unreadMessages.has(messageId) &&
       !sentReadStatusRef.current.has(messageId)
     ) {
-      // console.log("sendReadStatus", messageId);
-      sendReadStatus(messageId);
+      const readStatusSent = await sendReadStatus(messageId);
+      if (!readStatusSent) {
+        return;
+      }
       sentReadStatusRef.current.add(messageId);
       setUnreadMessages((prev) => {
         const next = new Set(prev);
