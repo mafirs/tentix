@@ -6,12 +6,14 @@ import {
   connectDB,
   logError,
   logInfo,
+  plainTextToTipTapJSON,
   textToTipTapJSON,
   saveMessageReadStatus,
   saveMessageToDb,
   withdrawMessage,
 } from "@/utils/index.ts";
 import { getAIResponse, workflowCache } from "@/utils/kb/workflow-cache.ts";
+import type { RagTrace, RagTraceHit } from "@/utils/kb/types.ts";
 import { runWithInterval } from "@/utils/runtime.ts";
 import { upgradeWebSocket, WS_CLOSE_CODE } from "@/utils/websocket.ts";
 import {
@@ -45,6 +47,7 @@ import { sendUnreadSSE, sendWsMessage, wsInstance } from "./tools.ts";
 const msgEmitter = new MessageEmitter();
 const roomEmitter = new RoomEmitter();
 const broadcastToRoom = roomEmitter.broadcastToRoom.bind(roomEmitter);
+const RAG_TRACE_CONTENT_LIMIT = 800;
 
 // Helpers: 判断房间是否存在非 customer 的真人（排除 system/ai）
 const HUMAN_STAFF_ROLES: userRoleType[] = ["agent", "technician", "admin"];
@@ -266,6 +269,7 @@ namespace aiHandler {
           and(
             eq(schema.chatMessages.ticketId, ticketId),
             eq(schema.users.role, "ai"),
+            eq(schema.chatMessages.isInternal, false),
           ),
         );
       currentCount = num?.count ?? 0;
@@ -364,7 +368,7 @@ namespace aiHandler {
       2000,
       async (result) => {
         try {
-          const JSONContent = textToTipTapJSON(result);
+          const JSONContent = textToTipTapJSON(result.response);
           const savedAIMessage = await saveMessageToDb(
             ticketId,
             aiUserId,
@@ -389,6 +393,26 @@ namespace aiHandler {
             timestamp: new Date(savedAIMessage.createdAt).getTime(),
             isInternal: false,
           });
+
+          if (result.ragTrace) {
+            try {
+              const traceMessage = formatRagTraceMessage(
+                result.ragTrace,
+                savedAIMessage.id,
+              );
+              const savedTraceMessage = await saveMessageToDb(
+                ticketId,
+                aiUserId,
+                plainTextToTipTapJSON(traceMessage),
+                true,
+              );
+              if (savedTraceMessage) {
+                broadcastInternalMessage(ticketId, aiUserId, savedTraceMessage);
+              }
+            } catch (error) {
+              logError("Error saving RAG trace message:", error);
+            }
+          }
         } finally {
           // Always clear lock and timeout
           aiProcessingSet.delete(ticketId);
@@ -438,7 +462,7 @@ msgEmitter.on("new_message", async function ({ ws, ctx, message }) {
 // 广播消息
 msgEmitter.on("new_message", function ({ ws, ctx, message }) {
   const broadcastExclude = message.isInternal
-    ? [ctx.clientId, roomCustomerMap.get(ctx.roomId)!]
+    ? getInternalMessageBroadcastExclude(ctx.roomId, ctx.clientId)
     : [ctx.clientId];
   // Broadcast message to room
   broadcastToRoom(
@@ -462,6 +486,169 @@ msgEmitter.on("new_message", function ({ ws, ctx, message }) {
     timestamp: message.timestamp,
   });
 });
+
+function getInternalMessageBroadcastExclude(
+  roomId: string,
+  senderClientId?: string,
+): string[] {
+  const excluded = new Set<string>();
+  if (senderClientId) excluded.add(senderClientId);
+  for (const clientId of getCustomerClientIds(roomId)) {
+    excluded.add(clientId);
+  }
+  return Array.from(excluded);
+}
+
+function getCustomerClientIds(roomId: string): string[] {
+  const roomUsers = roomEmitter.roomUserRoles.get(roomId);
+  if (!roomUsers) return [];
+  return Array.from(roomUsers.entries())
+    .filter(([, userInfo]) => userInfo.role === "customer")
+    .map(([clientId]) => clientId);
+}
+
+function broadcastInternalMessage(
+  ticketId: string,
+  userId: number,
+  message: NonNullable<Awaited<ReturnType<typeof saveMessageToDb>>>,
+) {
+  broadcastToRoom(
+    ticketId,
+    {
+      type: "new_message",
+      messageId: message.id,
+      roomId: ticketId,
+      userId,
+      content: message.content,
+      timestamp: new Date(message.createdAt).getTime(),
+      isInternal: true,
+    },
+    getInternalMessageBroadcastExclude(ticketId),
+  );
+}
+
+function formatRagTraceMessage(trace: RagTrace, aiMessageId: number): string {
+  const lines = [
+    `RAG 召回证据：${formatRagStatus(trace)}`,
+    `关联 AI 回复：#${aiMessageId}`,
+    `客户问题：${trace.userQuery || "（空）"}`,
+  ];
+
+  if (trace.generatedQueries.length > 0) {
+    lines.push(`检索词：${trace.generatedQueries.join(" / ")}`);
+  }
+  if (trace.moduleFilter) {
+    lines.push(`模块过滤：${trace.moduleFilter}`);
+  }
+  if (typeof trace.durationMs === "number") {
+    lines.push(`耗时：${trace.durationMs}ms`);
+  }
+  if (trace.reason) {
+    lines.push(`原因：${trace.reason}`);
+  }
+
+  if (trace.hits.length === 0) {
+    return lines.join("\n");
+  }
+
+  lines.push("", "召回详情：");
+  for (const hit of trace.hits) {
+    lines.push(formatRagTraceHit(hit));
+  }
+  return lines.join("\n");
+}
+
+function formatRagStatus(trace: RagTrace): string {
+  if (trace.status === "skipped") return "未检索";
+  if (trace.status === "search_failed") return "检索失败";
+  if (trace.status === "no_results") return "已检索，但无命中";
+  return `已检索，命中 ${trace.hits.length} 条`;
+}
+
+function formatRagTraceHit(hit: RagTraceHit): string {
+  const title =
+    getMetadataText(hit.metadata, "entry_title") ||
+    getMetadataText(hit.metadata, "doc_name") ||
+    "未命名知识";
+  const docName = getMetadataText(hit.metadata, "doc_name");
+  const revision = getMetadataText(hit.metadata, "revision");
+  const category = getMetadataText(hit.metadata, "category");
+  const scoreText = `${Math.round(hit.score * 100)}%`;
+  const providedChunkIds = hit.provided
+    .map((chunk) => formatChunkId(chunk.chunk_id))
+    .join(", ");
+  const matchedProvided = hit.provided.some((chunk) =>
+    isSameTraceChunk(chunk, hit.matched),
+  );
+  const lines = [
+    "",
+    `【${hit.rank}】${formatSourceType(hit.source_type)}｜${title}｜score ${scoreText}`,
+    `sourceId: ${hit.source_id || "（无）"}`,
+    `命中：chunk ${formatChunkId(hit.matched.chunk_id)}`,
+    `提供：chunk ${providedChunkIds || "无"}`,
+  ];
+
+  const metaParts = [
+    docName && `文档：${docName}`,
+    revision && `版本：${revision}`,
+    category && `分类：${category}`,
+  ].filter(Boolean);
+  if (metaParts.length > 0) {
+    lines.push(metaParts.join("｜"));
+  }
+
+  if (!matchedProvided) {
+    lines.push(
+      "",
+      "命中内容（未直接提供给 Tentix）：",
+      `chunk ${formatChunkId(hit.matched.chunk_id)}｜${truncateRagText(
+        hit.matched.content,
+      )}`,
+    );
+  }
+
+  if (hit.provided.length > 0) {
+    lines.push("", "提供给 Tentix：");
+  }
+  for (let index = 0; index < hit.provided.length; index++) {
+    const provided = hit.provided[index];
+    if (!provided) continue;
+    lines.push(
+      `chunk ${formatChunkId(provided.chunk_id)}｜${truncateRagText(
+        provided.content,
+      )}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function isSameTraceChunk(
+  left: { id: string; chunk_id?: number },
+  right: { id: string; chunk_id?: number },
+): boolean {
+  return left.id === right.id && left.chunk_id === right.chunk_id;
+}
+
+function formatSourceType(sourceType: RagTraceHit["source_type"]): string {
+  if (sourceType === "favorited_conversation") return "精选案例";
+  if (sourceType === "historical_ticket") return "历史工单";
+  return "通用知识";
+}
+
+function formatChunkId(chunkId: number | undefined): string {
+  return typeof chunkId === "number" ? String(chunkId) : "未知";
+}
+
+function truncateRagText(text: string): string {
+  if (text.length <= RAG_TRACE_CONTENT_LIMIT) return text;
+  return `${text.slice(0, RAG_TRACE_CONTENT_LIMIT)}...（已截断）`;
+}
+
+function getMetadataText(metadata: unknown, key: string): string {
+  if (!metadata || typeof metadata !== "object") return "";
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+}
 
 // 广播消息到观察者 sse 通知
 msgEmitter.on("new_message", function (...[props]) {

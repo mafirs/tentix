@@ -503,6 +503,7 @@ const ticketRouter = factory
             agent: basicUserCols,
             customer: basicUserCols,
             messages: {
+              where: (messages, { eq }) => eq(messages.isInternal, false),
               orderBy: [desc(schema.chatMessages.createdAt)],
               limit: 1,
               with: {

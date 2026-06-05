@@ -29,6 +29,38 @@ export interface SearchHit {
   metadata: unknown;
 }
 
+export type RagTraceStatus =
+  | "skipped"
+  | "searched"
+  | "no_results"
+  | "search_failed";
+
+export interface RagTraceChunk {
+  id: string;
+  chunk_id?: number;
+  content: string;
+}
+
+export interface RagTraceHit {
+  rank: number;
+  source_type: SourceType;
+  source_id?: string;
+  score: number;
+  metadata: unknown;
+  matched: RagTraceChunk;
+  provided: RagTraceChunk[];
+}
+
+export interface RagTrace {
+  status: RagTraceStatus;
+  reason?: string;
+  userQuery: string;
+  generatedQueries: string[];
+  moduleFilter?: string;
+  durationMs?: number;
+  hits: RagTraceHit[];
+}
+
 export interface VectorStore {
   upsert(docs: KBChunk[]): Promise<void>;
   search(args: {

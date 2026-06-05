@@ -14,7 +14,12 @@ import { RagConfig } from "@/utils/const";
 import { renderTemplate as renderLiquidTemplate } from "@/utils/template";
 import { ChatOpenAI } from "@langchain/openai";
 import { logError } from "@/utils";
-import { type SearchHit, type VectorStore } from "../types";
+import {
+  type RagTrace,
+  type RagTraceHit,
+  type SearchHit,
+  type VectorStore,
+} from "../types";
 import { quickNoSearchHeuristic } from "../tools";
 
 const decisionSchema = z.object({
@@ -32,6 +37,7 @@ export async function ragNode(
 ): Promise<Partial<WorkflowState>> {
   const variables = getVariables(state);
   let retrievedContext: Array<SearchHit> = [];
+  let ragTrace: RagTrace | undefined;
   const store = getStore();
   let shouldSearch = true;
 
@@ -39,7 +45,17 @@ export async function ragNode(
     // 先执行快速启发式判断，避免不必要的对象创建
     if (quickNoSearchHeuristic(variables.lastCustomerMessage)) {
       shouldSearch = false;
-      return { retrievedContext: [] };
+      return {
+        retrievedContext: [],
+        ragTrace: {
+          status: "skipped",
+          reason: "意图判断认为当前消息不需要知识库检索",
+          userQuery: variables.lastCustomerMessage,
+          generatedQueries: [],
+          moduleFilter: variables.currentTicket?.module,
+          hits: [],
+        },
+      };
     }
 
     // 快速判断未命中，才创建 LLM 实例
@@ -83,6 +99,19 @@ export async function ragNode(
       // 回退策略：解析失败则用保守策略（默认需要检索）
       shouldSearch = true;
     }
+  }
+  if (!shouldSearch) {
+    return {
+      retrievedContext: [],
+      ragTrace: {
+        status: "skipped",
+        reason: "意图判断认为当前消息不需要知识库检索",
+        userQuery: variables.lastCustomerMessage,
+        generatedQueries: [],
+        moduleFilter: variables.currentTicket?.module,
+        hits: [],
+      },
+    };
   }
   if (shouldSearch) {
     const ragStartTime = Date.now(); // 记录 RAG 开始时间
@@ -203,7 +232,18 @@ export async function ragNode(
       } catch (fallbackError) {
         logError("Fallback search also failed:", fallbackError);
         // 彻底失败，返回空结果
-        return { retrievedContext: [] };
+        return {
+          retrievedContext: [],
+          ragTrace: {
+            status: "search_failed",
+            reason: "向量检索失败，fallback query 也失败",
+            userQuery: variables.lastCustomerMessage,
+            generatedQueries: queries,
+            moduleFilter,
+            durationMs: Date.now() - ragStartTime,
+            hits: [],
+          },
+        };
       }
     }
 
@@ -247,16 +287,18 @@ export async function ragNode(
       }
     }
 
-    const sortedBeforeCollapse: Array<SearchHit & { finalScore: number }> = Array.from(
-      merged.values(),
-    ).sort((a, b) => b.finalScore - a.finalScore);
+    const sortedBeforeCollapse: Array<
+      SearchHit & { finalScore: number; hitCount: number; maxBaseScore: number }
+    > = Array.from(merged.values()).sort((a, b) => b.finalScore - a.finalScore);
     const sorted = collapseGeneralKnowledgeHits(sortedBeforeCollapse);
 
     // 多样性约束
     const MAX_PER_SOURCE = 2;
     const TOPN_BEFORE_EXPAND = 6;
     const perSourceCount = new Map<string, number>();
-    const top: Array<SearchHit & { finalScore: number }> = [];
+    const top: Array<
+      SearchHit & { finalScore: number; hitCount: number; maxBaseScore: number }
+    > = [];
 
     for (const h of sorted) {
       const key = JSON.stringify([h.source_type, h.source_id ?? ""]);
@@ -278,12 +320,33 @@ export async function ragNode(
       }
     }
 
-    const trimmedTop: SearchHit[] = top.map(
-      ({ finalScore: _fs, ...rest }) => rest,
+    const selectedHits = top.map((hit, index) => ({
+      ...hit,
+      rank: index + 1,
+    }));
+
+    const trimmedTop: SearchHit[] = selectedHits.map(
+      ({
+        finalScore: _fs,
+        hitCount: _hc,
+        maxBaseScore: _mbs,
+        rank: _rank,
+        ...rest
+      }) => rest,
     );
 
     const expandedTop = await expandDialogResults(trimmedTop, store);
     retrievedContext = expandedTop;
+    const ragDuration = Date.now() - ragStartTime;
+    ragTrace = buildRagTrace({
+      status: expandedTop.length > 0 ? "searched" : "no_results",
+      userQuery: variables.lastCustomerMessage,
+      generatedQueries: queries,
+      moduleFilter,
+      durationMs: ragDuration,
+      selectedHits,
+      expandedTop,
+    });
 
     // 在合并去重后，统一更新访问次数，确保每个 chunk 在一次对话中只计数一次
     // 通用知识命中 index 时，按最终返回给模型的 chunk_id=0 计数
@@ -297,7 +360,6 @@ export async function ragNode(
 
     if (finalChunkIds.length > 0) {
       try {
-        const ragDuration = Date.now() - ragStartTime; // 计算 RAG 耗时
         await store.updateAccessCount(finalChunkIds, {
           userQuery: variables.lastCustomerMessage,
           aiGenerateQueries: queries,
@@ -312,7 +374,7 @@ export async function ragNode(
     }
   }
 
-  return { retrievedContext };
+  return { retrievedContext, ragTrace };
 }
 
 async function expandDialogResults(
@@ -469,4 +531,69 @@ function collapseGeneralKnowledgeHits<T extends SearchHit & { finalScore: number
   }
 
   return result;
+}
+
+function buildRagTrace({
+  status,
+  userQuery,
+  generatedQueries,
+  moduleFilter,
+  durationMs,
+  selectedHits,
+  expandedTop,
+}: {
+  status: RagTrace["status"];
+  userQuery: string;
+  generatedQueries: string[];
+  moduleFilter?: string;
+  durationMs: number;
+  selectedHits: Array<
+    SearchHit & {
+      finalScore: number;
+      rank: number;
+    }
+  >;
+  expandedTop: SearchHit[];
+}): RagTrace {
+  const providedBySource = new Map<string, SearchHit[]>();
+  for (const hit of expandedTop) {
+    const key = JSON.stringify([hit.source_type, hit.source_id ?? ""]);
+    const list = providedBySource.get(key);
+    if (list) {
+      list.push(hit);
+    } else {
+      providedBySource.set(key, [hit]);
+    }
+  }
+
+  const hits: RagTraceHit[] = selectedHits.map((hit) => {
+    const key = JSON.stringify([hit.source_type, hit.source_id ?? ""]);
+    const provided = providedBySource.get(key) ?? [hit];
+    return {
+      rank: hit.rank,
+      source_type: hit.source_type,
+      source_id: hit.source_id,
+      score: hit.finalScore,
+      metadata: provided[0]?.metadata ?? hit.metadata,
+      matched: {
+        id: hit.id,
+        chunk_id: hit.chunk_id,
+        content: hit.content,
+      },
+      provided: provided.map((chunk) => ({
+        id: chunk.id,
+        chunk_id: chunk.chunk_id,
+        content: chunk.content,
+      })),
+    };
+  });
+
+  return {
+    status,
+    userQuery,
+    generatedQueries,
+    moduleFilter,
+    durationMs,
+    hits,
+  };
 }

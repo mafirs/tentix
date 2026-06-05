@@ -44,6 +44,7 @@ import { eq, asc } from "drizzle-orm";
 import * as schema from "@/db/schema.ts";
 import { connectDB } from "../tools";
 import { type WorkflowState, AgentMessage } from "./workflow-node/workflow-tools.ts";
+import type { RagTrace } from "./types.ts";
 import { logError, logInfo } from "@/utils/log.ts";
 import { WorkflowBuilder } from "./workflow-builder.ts";
 import { convertToMultimodalMessage, sleep } from "./tools";
@@ -636,7 +637,7 @@ export async function getAIResponse(
   isWorkflowTest: boolean = false,
   workflowId?: string,
   runtimeVariables?: Record<string, unknown>,
-): Promise<string> {
+): Promise<{ response: string; ragTrace?: RagTrace }> {
   const db = connectDB();
 
   // 1) 查询该工单的对话（带 sender 用户信息），按时间升序
@@ -739,6 +740,7 @@ export async function getAIResponse(
     handoffPriority: "P2",
     searchQueries: [],
     retrievedContext: [],
+    ragTrace: undefined,
     response: "",
     proposeEscalation: false,
     escalationReason: "",
@@ -756,7 +758,7 @@ export async function getAIResponse(
       const result = (await workflow.invoke(initialState)) as WorkflowState;
       const response = result.response ?? "";
       if (response !== "") {
-        return response;
+        return { response, ragTrace: result.ragTrace };
       }
     } catch (e) {
       logError(String(e));
@@ -769,7 +771,7 @@ export async function getAIResponse(
     }
   }
 
-  return "";
+  return { response: "" };
 }
 
 /**
@@ -919,6 +921,7 @@ export async function* streamAIResponse(
     handoffPriority: "P2",
     searchQueries: [],
     retrievedContext: [],
+    ragTrace: undefined,
     response: "",
     proposeEscalation: false,
     escalationReason: "",
