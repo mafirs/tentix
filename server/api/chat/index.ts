@@ -47,7 +47,6 @@ import { sendUnreadSSE, sendWsMessage, wsInstance } from "./tools.ts";
 const msgEmitter = new MessageEmitter();
 const roomEmitter = new RoomEmitter();
 const broadcastToRoom = roomEmitter.broadcastToRoom.bind(roomEmitter);
-const RAG_TRACE_CONTENT_LIMIT = 800;
 
 // Helpers: 判断房间是否存在非 customer 的真人（排除 system/ai）
 const HUMAN_STAFF_ROLES: userRoleType[] = ["agent", "technician", "admin"];
@@ -551,10 +550,11 @@ function formatRagTraceMessage(trace: RagTrace, aiMessageId: number): string {
     return lines.join("\n");
   }
 
-  lines.push("", "召回详情：");
+  lines.push("", "召回条目：");
   for (const hit of trace.hits) {
     lines.push(formatRagTraceHit(hit));
   }
+  lines.push("", "完整正文请到知识库面板按 sourceId 搜索，再查看对应 chunk。");
   return lines.join("\n");
 }
 
@@ -577,9 +577,6 @@ function formatRagTraceHit(hit: RagTraceHit): string {
   const providedChunkIds = hit.provided
     .map((chunk) => formatChunkId(chunk.chunk_id))
     .join(", ");
-  const matchedProvided = hit.provided.some((chunk) =>
-    isSameTraceChunk(chunk, hit.matched),
-  );
   const lines = [
     "",
     `【${hit.rank}】${formatSourceType(hit.source_type)}｜${title}｜score ${scoreText}`,
@@ -596,37 +593,7 @@ function formatRagTraceHit(hit: RagTraceHit): string {
   if (metaParts.length > 0) {
     lines.push(metaParts.join("｜"));
   }
-
-  if (!matchedProvided) {
-    lines.push(
-      "",
-      "命中内容（未直接提供给 Tentix）：",
-      `chunk ${formatChunkId(hit.matched.chunk_id)}｜${truncateRagText(
-        hit.matched.content,
-      )}`,
-    );
-  }
-
-  if (hit.provided.length > 0) {
-    lines.push("", "提供给 Tentix：");
-  }
-  for (let index = 0; index < hit.provided.length; index++) {
-    const provided = hit.provided[index];
-    if (!provided) continue;
-    lines.push(
-      `chunk ${formatChunkId(provided.chunk_id)}｜${truncateRagText(
-        provided.content,
-      )}`,
-    );
-  }
   return lines.join("\n");
-}
-
-function isSameTraceChunk(
-  left: { id: string; chunk_id?: number },
-  right: { id: string; chunk_id?: number },
-): boolean {
-  return left.id === right.id && left.chunk_id === right.chunk_id;
 }
 
 function formatSourceType(sourceType: RagTraceHit["source_type"]): string {
@@ -637,11 +604,6 @@ function formatSourceType(sourceType: RagTraceHit["source_type"]): string {
 
 function formatChunkId(chunkId: number | undefined): string {
   return typeof chunkId === "number" ? String(chunkId) : "未知";
-}
-
-function truncateRagText(text: string): string {
-  if (text.length <= RAG_TRACE_CONTENT_LIMIT) return text;
-  return `${text.slice(0, RAG_TRACE_CONTENT_LIMIT)}...（已截断）`;
 }
 
 function getMetadataText(metadata: unknown, key: string): string {
