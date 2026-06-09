@@ -6,6 +6,8 @@ import {
   TriangleAlertIcon,
   LibraryBigIcon,
   NavigationIcon,
+  EyeIcon,
+  EyeOffIcon,
 } from "lucide-react";
 import { type TicketType } from "tentix-server/rpc";
 import { updateTicketStatus } from "@lib/query";
@@ -27,6 +29,7 @@ import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState, useCallback } from "react";
 import useLocalUser from "@hook/use-local-user.tsx";
 import { useChatStore } from "@store/index";
+import { useInternalMessages } from "@store/internal-messages";
 
 interface SiteHeaderProps {
   ticket: TicketType;
@@ -50,6 +53,7 @@ export function StaffSiteHeader({
   const { role } = useLocalUser();
   const notCustomer = role !== "customer";
   const { kbSelectionMode, setKbSelectionMode, clearKbSelection } = useChatStore();
+  const { showInternal, toggleShowInternal } = useInternalMessages();
 
   // Close ticket mutation
   const closeTicketMutation = useMutation({
@@ -221,6 +225,36 @@ export function StaffSiteHeader({
             {t("transfer")}
           </Button>
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              className={
+                showInternal
+                  ? "flex items-center justify-center h-10 w-10 rounded-lg border-violet-200 bg-violet-50 hover:bg-violet-50"
+                  : "flex items-center justify-center h-10 w-10 rounded-lg border-zinc-200 hover:bg-zinc-50"
+              }
+              onClick={toggleShowInternal}
+              aria-label={t("internal_messages")}
+              aria-pressed={showInternal}
+            >
+              {showInternal ? (
+                <EyeIcon
+                  className="h-3 w-3 text-violet-600"
+                  strokeWidth={1.33}
+                />
+              ) : (
+                <EyeOffIcon
+                  className="h-3 w-3 text-zinc-500"
+                  strokeWidth={1.33}
+                />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={2}>
+            <p>{t("internal_messages")}</p>
+          </TooltipContent>
+        </Tooltip>
       </div>
       {transferModal}
       {updatePriorityModal}
