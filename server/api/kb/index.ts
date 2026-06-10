@@ -948,11 +948,6 @@ const kbRouter = factory
       const db = c.var.db;
       const { sourceType, sourceId } = c.req.valid("param");
       const payload = c.req.valid("json");
-      if (sourceType === "general_knowledge") {
-        throw new HTTPException(400, {
-          message: "General knowledge updates should use the import endpoint",
-        });
-      }
       const existing = await db
         .select()
         .from(schema.knowledgeBase)
@@ -981,6 +976,101 @@ const kbRouter = factory
       const rebuiltById = new Map<string, Awaited<ReturnType<typeof rebuildEditedKnowledgeMetadata>>>();
       const changedEmbeddingById = new Map<string, string>();
       const changedEntries = Array.from(changedContentById.entries());
+
+      if (sourceType === "general_knowledge") {
+        if (changedEntries.length === 0) {
+          return c.json({ success: true });
+        }
+
+        const parentChunk = existing.find((row) => Number(row.chunkId) === 0);
+        if (!parentChunk) {
+          throw new HTTPException(400, {
+            message: "General knowledge content chunk not found",
+          });
+        }
+
+        const indexRows = existing.filter((row) => Number(row.chunkId) > 0);
+        const indexById = new Map(indexRows.map((row) => [row.id, row]));
+        for (const [id, content] of changedEntries) {
+          const row = indexById.get(id);
+          if (!row) {
+            throw new HTTPException(400, {
+              message: "Only general knowledge recall indexes can be updated",
+            });
+          }
+          if (content.length > 500) {
+            throw new HTTPException(400, {
+              message: "Recall index content must not exceed 500 characters",
+            });
+          }
+        }
+
+        let changedGeneralKnowledgeIndexes: Array<{
+          id: string;
+          row: (typeof existing)[number];
+          content: string;
+          embedding: string;
+        }>;
+        try {
+          changedGeneralKnowledgeIndexes = await mapWithConcurrency(
+            changedEntries,
+            2,
+            async ([id, content]) => {
+              const row = indexById.get(id)!;
+              const embedding = await embedEditedKnowledgeContent(content);
+              return { id, row, content, embedding };
+            },
+          );
+        } catch (err) {
+          logWarning(`[kb.admin.rebuildGeneralKnowledgeIndex] failed source=${sourceType}:${sourceId}: ${String(err)}`);
+          throw new HTTPException(502, {
+            message: "Failed to rebuild general knowledge recall index",
+          });
+        }
+
+        const generatedIndexes = indexRows
+          .slice()
+          .sort((a, b) => Number(a.chunkId) - Number(b.chunkId))
+          .map((row) => changedContentById.get(row.id) ?? row.content)
+          .map((content) => content.trim())
+          .filter(Boolean);
+        const parentMetadata =
+          parentChunk.metadata && typeof parentChunk.metadata === "object"
+            ? (parentChunk.metadata as Record<string, unknown>)
+            : {};
+
+        await db.transaction(async (tx) => {
+          for (const { id, row, content, embedding } of changedGeneralKnowledgeIndexes) {
+            await tx
+              .update(schema.knowledgeBase)
+              .set({
+                content,
+                embedding: sql`${embedding}::tentix.vector(3072)`,
+                contentHash: hashKnowledgeContent({
+                  sourceType,
+                  sourceId,
+                  chunkId: Number(row.chunkId),
+                  content,
+                }),
+                updatedAt: sql`NOW()`,
+              })
+              .where(eq(schema.knowledgeBase.id, id));
+          }
+
+          await tx
+            .update(schema.knowledgeBase)
+            .set({
+              metadata: {
+                ...parentMetadata,
+                generated_indexes: generatedIndexes,
+              },
+              updatedAt: sql`NOW()`,
+            })
+            .where(eq(schema.knowledgeBase.id, parentChunk.id));
+        });
+
+        return c.json({ success: true });
+      }
 
       if (changedEntries.length > 0) {
         try {

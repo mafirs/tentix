@@ -1387,17 +1387,52 @@ function KnowledgeBaseTab() {
 
   const handleSave = () => {
     if (!detail) return;
-    if (detail.sourceType === "general_knowledge") {
-      toast({
-        title: "通用知识请通过导入接口覆盖更新",
-        variant: "destructive",
-      });
-      return;
-    }
     const changedChunks = draftChunks.filter((chunk) => {
       const original = detail.chunks.find((item) => item.id === chunk.id);
       return original && original.content !== chunk.content;
     });
+
+    if (detail.sourceType === "general_knowledge") {
+      const changedIndexChunks = changedChunks.filter((chunk) => chunk.chunkId > 0);
+      const hasContentChunkChange = changedChunks.some((chunk) => chunk.chunkId === 0);
+      if (hasContentChunkChange) {
+        toast({
+          title: "通用知识正文暂不支持在此保存",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (changedIndexChunks.length === 0) {
+        toast({ title: "没有需要保存的召回索引改动" });
+        return;
+      }
+      const invalidIndexChunk = changedIndexChunks.find((chunk) => {
+        const content = chunk.content.trim();
+        return content.length === 0 || content.length > 500;
+      });
+      if (invalidIndexChunk) {
+        toast({
+          title: "召回索引不能为空且不能超过 500 个字符",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      updateKnowledgeMutation.mutate(
+        {
+          sourceType: detail.sourceType,
+          sourceId: detail.sourceId,
+          data: {
+            chunks: changedIndexChunks.map((chunk) => ({
+              id: chunk.id,
+              content: chunk.content,
+            })),
+          },
+        },
+        { onSuccess: () => toast({ title: "召回索引已保存并重建" }) },
+      );
+      return;
+    }
     if (changedChunks.length === 0) {
       toast({ title: "没有需要保存的改动" });
       return;
@@ -1963,7 +1998,7 @@ function KnowledgeBaseTab() {
                       <div className="text-sm font-medium">内容片段</div>
                       <div className="text-xs text-muted-foreground">
                         {isGeneralKnowledgeDetail
-                          ? "通用知识通过导入接口覆盖更新"
+                          ? "仅召回索引可编辑，正式知识正文保持只读"
                           : "未点击保存前不会写入数据库"}
                       </div>
                     </div>
@@ -2016,7 +2051,8 @@ function KnowledgeBaseTab() {
                           </div>
                           <Textarea
                             value={chunk.content}
-                            readOnly={isGeneralKnowledgeDetail}
+                            readOnly={isGeneralKnowledgeDetail && chunk.chunkId === 0}
+                            maxLength={isGeneralKnowledgeDetail && chunk.chunkId > 0 ? 500 : undefined}
                             onChange={(e) =>
                               setDraftChunks((prev) =>
                                 prev.map((item) =>
@@ -2029,7 +2065,7 @@ function KnowledgeBaseTab() {
                             className={cn(
                               "min-h-[130px] resize-y text-sm leading-6",
                               chunk.isDeleted && "border-destructive/30 bg-destructive/5",
-                              isGeneralKnowledgeDetail && "bg-muted/40",
+                              isGeneralKnowledgeDetail && chunk.chunkId === 0 && "bg-muted/40",
                             )}
                           />
                         </div>
@@ -2039,7 +2075,7 @@ function KnowledgeBaseTab() {
                 )}
 
                 <div className="flex items-center gap-2">
-                  {isFailureView || isGeneralKnowledgeDetail ? null : (
+                  {isFailureView || (isGeneralKnowledgeDetail && !draftChunks.some((chunk) => chunk.chunkId > 0)) ? null : (
                     <Button onClick={handleSave} disabled={isMutating} className="shadow-sm">
                       <Save className="mr-2 h-4 w-4" />
                       保存并重建索引
