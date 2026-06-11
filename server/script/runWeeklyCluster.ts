@@ -1,4 +1,3 @@
-import "@/api/precede.ts";
 import { connectDB } from "@/utils/tools.ts";
 import { logComplete, logError, logInfo, logWarning } from "@/utils/log.ts";
 import {
