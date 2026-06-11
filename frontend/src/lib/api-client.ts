@@ -79,6 +79,7 @@ export const myFetch = ky.extend({
 
 const KB_ADMIN_SAVE_TIMEOUT_MS = 60_000;
 const HOT_ISSUES_ANALYTICS_TIMEOUT_MS = 90_000;
+const ISSUE_CLUSTERS_ANALYTICS_TIMEOUT_MS = 120_000;
 
 export const kbAdminSaveFetch = myFetch.extend({
   timeout: KB_ADMIN_SAVE_TIMEOUT_MS,
@@ -86,6 +87,10 @@ export const kbAdminSaveFetch = myFetch.extend({
 
 export const hotIssuesAnalyticsFetch = myFetch.extend({
   timeout: HOT_ISSUES_ANALYTICS_TIMEOUT_MS,
+});
+
+export const issueClustersAnalyticsFetch = myFetch.extend({
+  timeout: ISSUE_CLUSTERS_ANALYTICS_TIMEOUT_MS,
 });
 
 export const apiClient = initClient(import.meta.env.BASE_URL, {

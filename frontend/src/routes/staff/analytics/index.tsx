@@ -119,6 +119,10 @@ function AnalyticsDashboard() {
       queryKey: ["hotIssuesAnalysis"],
       refetchType: "all",
     });
+    queryClient.invalidateQueries({
+      queryKey: ["issueClusters"],
+      refetchType: "all",
+    });
     
     // 更新显示时间
     setLastUpdated(new Date().toLocaleTimeString("zh-CN", { 
@@ -192,7 +196,7 @@ function AnalyticsDashboard() {
                     priority="medium"
                     height="h-96"
                   />
-                  
+
                   <PriorityAnalyticsWrapper
                     componentName="RatingAnalysis"
                     filterParams={filterParams}
@@ -206,6 +210,13 @@ function AnalyticsDashboard() {
                 <>
                   <PriorityAnalyticsWrapper
                     componentName="KnowledgeBaseHits"
+                    filterParams={filterParams}
+                    priority="low"
+                    height="h-96"
+                  />
+
+                  <PriorityAnalyticsWrapper
+                    componentName="FrequentIssuesAnalysis"
                     filterParams={filterParams}
                     priority="low"
                     height="h-96"

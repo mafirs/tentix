@@ -1,5 +1,9 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiClient, hotIssuesAnalyticsFetch } from "./api-client";
+import {
+  apiClient,
+  hotIssuesAnalyticsFetch,
+  issueClustersAnalyticsFetch,
+} from "./api-client";
 
 const buildAnalyticsParams = (filterParams?: {
   startDate?: string;
@@ -137,6 +141,63 @@ export const hotIssuesQueryOptions = (filterParams?: {
     gcTime: 30 * 60 * 1000,
   });
 
+export type IssueClusterWindow = "7d" | "30d" | "90d" | "live";
+
+export type IssueClusterTrend =
+  | { type: "up" | "down" | "flat"; delta?: number }
+  | { type: "new" }
+  | null;
+
+export interface IssueClusterTicket {
+  id: string;
+  title: string;
+  snippet: string;
+}
+
+export interface IssueClusterItem {
+  id: string;
+  canonicalId: number | null;
+  summary: string;
+  totalCount: number;
+  module: string;
+  firstSeenWeek: string;
+  weeksSinceFirst: number;
+  trend: IssueClusterTrend;
+  perWeekCounts: number[];
+  tickets: IssueClusterTicket[];
+}
+
+export interface IssueClustersResponse {
+  window: IssueClusterWindow;
+  status: "ready" | "empty" | "pending";
+  generatedAt?: string;
+  dataThrough?: string;
+  clusters: IssueClusterItem[];
+  longTailCount: number;
+}
+
+export const issueClustersQueryOptions = (window: IssueClusterWindow) =>
+  queryOptions({
+    queryKey: ["issueClusters", window],
+    queryFn: async (): Promise<IssueClustersResponse> => {
+      const response = await apiClient.analytics["issue-clusters"].$get(
+        { query: { window } },
+        { fetch: issueClustersAnalyticsFetch },
+      );
+      return response.json();
+    },
+    ...analyticsQueryConfig,
+    staleTime: 5 * 60 * 1000,
+  });
+
+export const runIssueClustersManualRun = async () => {
+  const response = await apiClient.analytics["issue-clusters"]["manual-run"].$post(
+    {},
+    { fetch: issueClustersAnalyticsFetch },
+  );
+  return response.json();
+};
+
 export const ratingAnalysisQueryOptions = (filterParams?: {
   startDate?: string;
   endDate?: string;
@@ -175,4 +236,3 @@ export const knowledgeHitsQueryOptions = (filterParams?: {
     },
     ...analyticsQueryConfig,
   });
-

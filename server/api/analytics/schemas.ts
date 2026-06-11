@@ -18,6 +18,10 @@ export const hotIssuesQuerySchema = z.object({
   limit: z.string().regex(/^\d+$/).optional(),
 });
 
+export const issueClustersQuerySchema = z.object({
+  window: z.enum(["7d", "30d", "90d", "live"]).default("30d"),
+});
+
 export const ticketStatusResponseSchema = z.object({
   totalTickets: z.number(),
   statusCounts: z.object({
@@ -30,5 +34,4 @@ export const ticketStatusResponseSchema = z.object({
   completionRate: z.number(),
   backlogWarning: z.boolean(),
 });
-
 
