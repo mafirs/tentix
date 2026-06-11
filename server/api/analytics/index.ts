@@ -5,7 +5,6 @@ import { moduleAnalysisRouter } from "./module-analysis.ts";
 import { knowledgeBaseHitsRouter } from "./knowledge-base-hits.ts";
 import { ratingAnalysisRouter } from "./rating-analysis.ts";
 import { hotIssuesAnalysisRouter } from "./hot-issues-analysis.ts";
-import { issueClustersRouter } from "./issue-clusters.ts";
 
 const analyticsRouter = factory
   .createApp()
@@ -16,7 +15,6 @@ const analyticsRouter = factory
   .route("/", moduleAnalysisRouter)
   .route("/", knowledgeBaseHitsRouter)
   .route("/", ratingAnalysisRouter)
-  .route("/", hotIssuesAnalysisRouter)
-  .route("/", issueClustersRouter);
+  .route("/", hotIssuesAnalysisRouter);
 
 export { analyticsRouter };

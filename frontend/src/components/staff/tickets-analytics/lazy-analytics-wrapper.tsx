@@ -18,7 +18,6 @@ const LazyComponents = {
   RatingAnalysis: lazy(() => import("./rating-analysis").then(m => ({ default: m.RatingAnalysis }))),
   KnowledgeBaseHits: lazy(() => import("./knowledge-base-hits").then(m => ({ default: m.KnowledgeBaseHits }))),
   HotIssuesAnalysis: lazy(() => import("./hot-issues-analysis").then(m => ({ default: m.HotIssuesAnalysis }))),
-  FrequentIssuesAnalysis: lazy(() => import("./frequent-issues-analysis").then(m => ({ default: m.FrequentIssuesAnalysis }))),
 };
 
 // 加载骨架屏组件

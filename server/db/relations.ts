@@ -24,9 +24,6 @@ import {
   aiRoleConfig,
   workflowTestTicket,
   workflowTestMessage,
-  issueCanonical,
-  issueClusterRun,
-  weeklyIssueCluster,
 } from "./schema.ts";
 
 // Define relations for detailed tickets
@@ -59,7 +56,6 @@ export const ticketsRelations = relations(tickets, ({ many, one }) => ({
   historyConversationKnowledge: one(historyConversationKnowledge), // 工单最多只能有一条历史对话知识记录
 
   handoffRecord: one(handoffRecords), // 工单可以有一条转人工请求记录
-  weeklyIssueClusters: many(weeklyIssueCluster),
 }));
 
 export const ticketHistoryRelations = relations(ticketHistory, ({ one }) => ({
@@ -182,46 +178,6 @@ export const ticketsTagsRelations = relations(ticketsTags, ({ one }) => ({
 export const tagsRelations = relations(tags, ({ many }) => ({
   tickets: many(ticketsTags), // ref to ticketsTagsRelations
 }));
-
-export const issueCanonicalRelations = relations(
-  issueCanonical,
-  ({ many, one }) => ({
-    weeklyClusters: many(weeklyIssueCluster),
-    mergedIntoCanonical: one(issueCanonical, {
-      fields: [issueCanonical.mergedInto],
-      references: [issueCanonical.id],
-      relationName: "issue_canonical_merge",
-    }),
-    mergedChildren: many(issueCanonical, {
-      relationName: "issue_canonical_merge",
-    }),
-  }),
-);
-
-export const issueClusterRunRelations = relations(
-  issueClusterRun,
-  ({ many }) => ({
-    clusters: many(weeklyIssueCluster),
-  }),
-);
-
-export const weeklyIssueClusterRelations = relations(
-  weeklyIssueCluster,
-  ({ one }) => ({
-    run: one(issueClusterRun, {
-      fields: [weeklyIssueCluster.runId],
-      references: [issueClusterRun.id],
-    }),
-    canonical: one(issueCanonical, {
-      fields: [weeklyIssueCluster.canonicalId],
-      references: [issueCanonical.id],
-    }),
-    representativeTicket: one(tickets, {
-      fields: [weeklyIssueCluster.representativeTicketId],
-      references: [tickets.id],
-    }),
-  }),
-);
 
 export const userSessionRelations = relations(userSession, ({ one }) => ({
   user: one(users, {
