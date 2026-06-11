@@ -51,7 +51,7 @@ function Sparkline({ values }: { values: number[] }) {
 
 export function FrequentIssuesAnalysis() {
   const queryClient = useQueryClient();
-  const [window, setWindow] = useState<IssueClusterWindow>("30d");
+  const [window, setWindow] = useState<IssueClusterWindow>("live");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const { data, isLoading, isError, error } = useQuery(
     issueClustersQueryOptions(window),
