@@ -61,7 +61,7 @@ import {
   useQueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { apiClient, kbAdminSaveFetch } from "@lib/api-client";
+import { apiClient, kbAdminSaveFetch, kbIndexGenerateFetch } from "@lib/api-client";
 import {
   Search,
   Plus,
@@ -177,6 +177,11 @@ type GeneralKnowledgeCreatePayload = {
   revision: string;
   content: string;
   indexes?: string[];
+};
+
+type GeneralKnowledgeIndexesResponse = {
+  success: boolean;
+  data: { indexes: string[] };
 };
 
 function getDefaultGeneralKnowledgeFormValues(): CreateGeneralKnowledgeFormData {
@@ -403,6 +408,28 @@ async function createGeneralKnowledgePayload(
     success: boolean;
     data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number };
   };
+}
+
+async function generateGeneralKnowledgeIndexes(
+  data: CreateGeneralKnowledgeFormData,
+): Promise<string[]> {
+  const res = await apiClient.kb.admin["general-knowledge"].indexes.generate.$post(
+    {
+      json: {
+        title: data.title.trim(),
+        modules: data.modules,
+        category: data.category,
+        content: data.content.trim(),
+      },
+    },
+    { fetch: kbIndexGenerateFetch },
+  );
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(getErrorMessage(errorData, "召回索引生成失败"));
+  }
+  const body = (await res.json()) as GeneralKnowledgeIndexesResponse;
+  return body.data.indexes;
 }
 
 async function createGeneralKnowledge(
@@ -1172,6 +1199,7 @@ function KnowledgeBaseTab() {
   const [selectedKnowledge, setSelectedKnowledge] = useState<Pick<KnowledgeListItem, "sourceType" | "sourceId"> | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [autoGenerateIndexes, setAutoGenerateIndexes] = useState(false);
   const ticketModules = useTicketModules();
   const createKnowledgeForm = useForm<CreateGeneralKnowledgeFormData>({
     resolver: zodResolver(createGeneralKnowledgeFormSchema),
@@ -1370,6 +1398,41 @@ function KnowledgeBaseTab() {
     },
   });
 
+  const generateGeneralKnowledgeIndexesMutation = useMutation({
+    mutationFn: generateGeneralKnowledgeIndexes,
+    onSuccess: (indexes) => {
+      if (indexes.length === 0) {
+        toast({ title: "未生成有效召回索引" });
+        return;
+      }
+      const fields = ["index1", "index2", "index3"] as const;
+      let nextIndex = 0;
+      let filledCount = 0;
+      for (const field of fields) {
+        if (nextIndex >= indexes.length) break;
+        const current = createKnowledgeForm.getValues(field)?.trim();
+        if (current) continue;
+        createKnowledgeForm.setValue(field, indexes[nextIndex]!, {
+          shouldDirty: true,
+          shouldValidate: true,
+        });
+        nextIndex += 1;
+        filledCount += 1;
+      }
+      if (filledCount === 0) {
+        toast({ title: "召回索引已存在，未覆盖" });
+        return;
+      }
+      toast({ title: "召回索引已生成" });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "召回索引生成失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefresh = () => {
     invalidateKnowledgeQueries();
   };
@@ -1378,11 +1441,30 @@ function KnowledgeBaseTab() {
     setCreateDialogOpen(open);
     if (!open) {
       createKnowledgeForm.reset(getDefaultGeneralKnowledgeFormValues());
+      setAutoGenerateIndexes(false);
+      generateGeneralKnowledgeIndexesMutation.reset();
     }
   };
 
   const handleCreateGeneralKnowledge = (values: CreateGeneralKnowledgeFormData) => {
     createGeneralKnowledgeMutation.mutate(values);
+  };
+
+  const handleGenerateGeneralKnowledgeIndexes = async () => {
+    const valid = await createKnowledgeForm.trigger([
+      "title",
+      "modules",
+      "category",
+      "content",
+    ]);
+    if (!valid) {
+      toast({
+        title: "请先填写标题、适用模块、分类和正文",
+        variant: "destructive",
+      });
+      return;
+    }
+    generateGeneralKnowledgeIndexesMutation.mutate(createKnowledgeForm.getValues());
   };
 
   const handleSave = () => {
@@ -1609,6 +1691,37 @@ function KnowledgeBaseTab() {
                   )}
                 />
                 <div className="grid gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={autoGenerateIndexes}
+                        disabled={
+                          createGeneralKnowledgeMutation.isPending ||
+                          generateGeneralKnowledgeIndexesMutation.isPending
+                        }
+                        onCheckedChange={(value) =>
+                          setAutoGenerateIndexes(value === true)
+                        }
+                      />
+                      <span>召回索引自动生成</span>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        !autoGenerateIndexes ||
+                        createGeneralKnowledgeMutation.isPending ||
+                        generateGeneralKnowledgeIndexesMutation.isPending
+                      }
+                      onClick={handleGenerateGeneralKnowledgeIndexes}
+                    >
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      {generateGeneralKnowledgeIndexesMutation.isPending
+                        ? "生成中"
+                        : "生成"}
+                    </Button>
+                  </div>
                   {(["index1", "index2", "index3"] as const).map((name, index) => (
                     <FormField
                       key={name}
@@ -1634,7 +1747,13 @@ function KnowledgeBaseTab() {
                   >
                     取消
                   </Button>
-                  <Button type="submit" disabled={createGeneralKnowledgeMutation.isPending}>
+                  <Button
+                    type="submit"
+                    disabled={
+                      createGeneralKnowledgeMutation.isPending ||
+                      generateGeneralKnowledgeIndexesMutation.isPending
+                    }
+                  >
                     {createGeneralKnowledgeMutation.isPending ? "添加中" : "添加"}
                   </Button>
                 </DialogFooter>

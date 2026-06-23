@@ -22,7 +22,7 @@ import {
 } from "../middleware.ts";
 import { emit, Events } from "@/utils/events/kb/bus";
 import { HTTPException } from "hono/http-exception";
-import { OpenAIEmbeddings } from "@langchain/openai";
+import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { logWarning } from "@/utils/log";
 import { OPENAI_CONFIG, SOURCE_WEIGHTS } from "@/utils/kb/config";
 import {
@@ -126,6 +126,32 @@ const createGeneralKnowledgeResponseSchema = z.object({
     sourceType: z.literal("general_knowledge"),
     sourceId: z.string(),
     chunkCount: z.number(),
+  }),
+});
+
+const generateGeneralKnowledgeIndexesSchema = z
+  .object({
+    title: z.string().trim().min(1, "标题不能为空").max(200),
+    modules: z
+      .array(z.string().trim().min(1).max(80))
+      .min(1, "至少选择一个模块")
+      .max(10, "模块数量不能超过 10 个"),
+    category: z.enum(generalKnowledgeCategoryValues),
+    content: z.string().trim().min(1, "正文不能为空").max(20000),
+  })
+  .strict();
+
+const generatedGeneralKnowledgeIndexesSchema = z.object({
+  indexes: z
+    .array(z.string().trim().min(1).max(500))
+    .max(3)
+    .describe("用于召回通用知识的真实用户问法或检索短句，最多 3 条"),
+});
+
+const generateGeneralKnowledgeIndexesResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    indexes: z.array(z.string()),
   }),
 });
 
@@ -284,6 +310,92 @@ function normalizeStringList(values: string[] | undefined): string[] {
   return Array.from(
     new Set((values ?? []).map((item) => item.trim()).filter(Boolean)),
   );
+}
+
+function normalizeGeneratedIndexes(values: string[] | undefined): string[] {
+  return normalizeStringList(values)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter((item) => item.length > 0 && item.length <= 500)
+    .slice(0, 3);
+}
+
+async function generateGeneralKnowledgeRecallIndexes(
+  payload: z.infer<typeof generateGeneralKnowledgeIndexesSchema>,
+): Promise<string[]> {
+  if (!OPENAI_CONFIG.apiKey || !OPENAI_CONFIG.summaryModel) {
+    throw new HTTPException(503, {
+      message: "AI 召回索引生成未配置",
+    });
+  }
+
+  const model = new ChatOpenAI({
+    apiKey: OPENAI_CONFIG.apiKey,
+    model: OPENAI_CONFIG.summaryModel,
+    temperature: 0.2,
+    configuration: {
+      baseURL: OPENAI_CONFIG.baseURL,
+    },
+  });
+  const structured = model.withStructuredOutput(generatedGeneralKnowledgeIndexesSchema);
+  const promptText = [
+    "你在为 Tentix / Sealos 工单 RAG 的通用知识生成召回索引。",
+    "召回索引会作为独立向量 chunk 入库；用户消息会先被改写成 2-3 条短检索词，也可能直接用原始最近客户消息检索。",
+    "因此 indexes 必须优先模拟“用户尚未被诊断前会怎么问”，不要模拟客服已经知道答案后的诊断结论。",
+    "输出必须是严格 JSON，结构为：",
+    '{ "indexes": string[] }',
+    "",
+    "核心原则：",
+    "1) 不套固定模板。不要机械拼接“对象 + 动作/状态”，要根据正文判断用户最可能的自然说法。",
+    "2) 只生成用户视角的入口问题：用户看见的对象、页面、产品、状态、错误、限制或目标操作。",
+    "3) 不生成答案侧内容：原因、诊断分支、排查命令、处理步骤、客服话术、结论，都不要作为索引。",
+    "4) 可以保留用户会复制粘贴的精确 token，例如错误码、英文报错、状态名、页面名、按钮名、产品名。",
+    "",
+    "历史工单中的常见问法方向，仅用于判断语境，禁止机械套用：",
+    "- 状态卡住：用户会说“一直准备中 / 执行中 / 变更中 / 创建中 / 卡住”，通常不会先说明原因。",
+    "- 连接失败：用户会说“打不开 / 连不上 / 访问不了 / 不通 / 连接失败”，常带 IDE、SSH、Cursor、Trae、数据库、公网地址等对象。",
+    "- 运行报错：用户会说“启动不了 / 运行失败 / 一直重启 / 报错”，也可能直接贴错误原文。",
+    "- 配置咨询：用户会问“怎么配置 / 如何部署 / 是否支持 / 能不能 / 在哪里看 / 怎么绑定”。",
+    "- 账号计费：用户会说“为什么扣费 / 发票没收到 / 充值失败 / 登录不了 / 备案码在哪里”。",
+    "- 存储权限：用户会说“空间不足 / 权限不够 / 挂载不了 / 怎么扩容 / 怎么备份导出”。",
+    "",
+    "生成策略：",
+    "1) 先判断这篇知识更像哪类入口：排障、配置教程、规则限制、账号计费、存储权限、错误日志或状态卡住。",
+    "2) 每条 indexes 只覆盖一个用户入口，不要把多个诊断分支揉成一条。",
+    "3) 优先生成 2-3 条彼此不同的自然短句；如果只有一个高置信入口，只输出 1 条。",
+    "4) 对排障知识，索引应像症状首问，不要包含排查命令或根因判断。",
+    "5) 对教程/配置知识，索引应像“怎么做/是否支持/在哪里配置”的问题。",
+    "6) 对规则/限制知识，索引应像“为什么不行/能不能/有什么限制”的问题。",
+    "7) 对账号、计费、备案、发票类知识，索引应保留用户实际关心的动作或困惑，不要只拼关键词。",
+    "8) 对错误日志类知识，可把最核心的错误原文作为一条索引，但不要扩写成解决方案标题。",
+    "",
+    "生成规则：",
+    "1) indexes 最多 3 条；每条优先控制在 6-40 个中文字符，硬上限 80 字。",
+    "2) 必须只使用标题、模块、分类、正文中能支持的信息；可以做口语化改写，但不能新增正文没有的产品、错误、限制或场景。",
+    "3) 禁止输出泛词：问题、报错、异常、故障、解决方法、怎么解决、[图片]、是的、需要、好的。",
+    "4) 禁止输出排查动作，除非用户会直接把该命令或配置项当作问题来问。",
+    "5) 禁止输出包含完整答案的索引，例如“因为 X 导致 Y”“通过 X 解决 Y”。",
+    "6) 如果正文只适合作为客服内部流程，缺少用户会搜索的对象、症状、错误、限制或目标操作，返回空数组。",
+    "",
+    "通用知识信息：",
+    `- 标题: ${payload.title}`,
+    `- 适用模块: ${payload.modules.join(", ")}`,
+    `- 分类: ${payload.category}`,
+    "",
+    "正式知识正文：",
+    payload.content,
+  ].join("\n");
+
+  try {
+    const result = await structured.invoke(promptText);
+    return normalizeGeneratedIndexes(result.indexes);
+  } catch (err) {
+    logWarning(
+      `[kb.admin.generateGeneralKnowledgeIndexes] failed: ${String(err)}`,
+    );
+    throw new HTTPException(502, {
+      message: "Failed to generate general knowledge recall indexes",
+    });
+  }
 }
 
 function parseGeneralKnowledgeSourceId(sourceId: string): {
@@ -491,6 +603,34 @@ const kbRouter = factory
         success: true,
         message: "Favorited knowledge processed successfully",
         data: { id: recordId, syncStatus: "pending" },
+      });
+    },
+  )
+  .post(
+    "/admin/general-knowledge/indexes/generate",
+    adminOnlyMiddleware(),
+    describeRoute({
+      tags: ["KB"],
+      description: "Generate recall indexes for a general knowledge draft",
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: {
+          description: "Recall indexes generated successfully",
+          content: {
+            "application/json": {
+              schema: resolver(generateGeneralKnowledgeIndexesResponseSchema),
+            },
+          },
+        },
+      },
+    }),
+    zValidator("json", generateGeneralKnowledgeIndexesSchema),
+    async (c) => {
+      const payload = c.req.valid("json");
+      const indexes = await generateGeneralKnowledgeRecallIndexes(payload);
+      return c.json({
+        success: true,
+        data: { indexes },
       });
     },
   )
