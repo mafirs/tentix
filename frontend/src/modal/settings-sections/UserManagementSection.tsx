@@ -36,10 +36,13 @@ type UsersResponse = {
     name: string;
     avatar?: string | null;
     role: AssignableUserRole | "system";
+    nickname?: string | null;
     realName?: string | null;
+    phoneNum?: string | null;
     email?: string | null;
     level?: number | null;
     registerTime: string;
+    sealosId?: string | null;
   }>;
   pagination: { total: number; totalPages: number };
 };
@@ -225,30 +228,98 @@ export function UserManagementSection() {
                         <TableRow className="bg-zinc-50/50">
                           <TableCell colSpan={3}>
                             <div className="p-4 border-t">
-                              <div className="grid grid-cols-2 gap-4 text-sm text-zinc-700">
-                                <div>
-                                  <span className="text-zinc-500 mr-2">ID</span>
+                              <div className="flex items-center gap-3 mb-4">
+                                <Avatar className="w-10 h-10">
+                                  <AvatarImage
+                                    src={user.avatar || "/placeholder.svg"}
+                                  />
+                                  <AvatarFallback className="text-sm">
+                                    {user.name?.charAt(0) || "U"}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-zinc-900 truncate">
+                                      {user.name || "-"}
+                                    </span>
+                                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+                                      {user.role === "customer" && "客户"}
+                                      {user.role === "agent" && "客服"}
+                                      {user.role === "technician" && "技术员"}
+                                      {user.role === "admin" && "管理员"}
+                                      {user.role === "ai" && "AI"}
+                                      {user.role === "system" && "系统"}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-zinc-500">
+                                    用户身份信息
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm text-zinc-700">
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    Sealos ID
+                                  </span>
+                                  <span className="font-mono break-all">
+                                    {user.sealosId || "-"}
+                                  </span>
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    Tentix ID
+                                  </span>
                                   <span className="font-mono">{user.id}</span>
                                 </div>
-                                <div>
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    用户名
+                                  </span>
+                                  <span>{user.name || "-"}</span>
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    昵称
+                                  </span>
+                                  <span>{user.nickname || "-"}</span>
+                                </div>
+                                <div className="min-w-0">
                                   <span className="text-zinc-500 mr-2">
                                     真实姓名
                                   </span>
                                   <span>{user.realName || "-"}</span>
                                 </div>
-                                <div>
+                                <div className="min-w-0">
                                   <span className="text-zinc-500 mr-2">
                                     邮箱
                                   </span>
-                                  <span className="font-mono">
+                                  <span className="font-mono break-all">
                                     {user.email || "-"}
                                   </span>
                                 </div>
-                                <div>
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    手机号
+                                  </span>
+                                  <span className="font-mono">
+                                    {user.phoneNum || "-"}
+                                  </span>
+                                </div>
+                                <div className="min-w-0">
                                   <span className="text-zinc-500 mr-2">
                                     级别
                                   </span>
-                                  <span> {user.level}</span>
+                                  <span>{user.level ?? "-"}</span>
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="text-zinc-500 mr-2">
+                                    注册时间
+                                  </span>
+                                  <span>
+                                    {formatRegisterTime(user.registerTime) ||
+                                      "-"}
+                                  </span>
                                 </div>
                               </div>
                             </div>
