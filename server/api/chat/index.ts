@@ -293,150 +293,146 @@ namespace aiHandler {
       logInfo(`AI already responding for ticket ${ticketId}, skip trigger.`);
       return;
     }
-
-    // ai 不响应 closed 状态的工单 和 已经转人工的工单
-    const ticket = await db.query.tickets.findFirst({
-      where: (t, { eq }) => eq(t.id, ticketId),
-      columns: {
-        id: true,
-        title: true,
-        description: true,
-        module: true,
-        category: true,
-        status: true,
-      },
-    });
-
-    if (!ticket || ticket.status === "resolved") {
-      logInfo(`Ticket ${ticketId} is closed or not found, skip AI response.`);
-      return;
-    }
-
-    const handoffRecord = await db.query.handoffRecords.findFirst({
-      where: (h, { eq }) => eq(h.ticketId, ticketId),
-      columns: {
-        id: true,
-        notificationSent: true,
-        handoffReason: false,
-        priority: false,
-        sentiment: false,
-      },
-    });
-
-    if (handoffRecord?.notificationSent) {
-      logInfo(`Ticket ${ticketId} has already been handoff, skip AI response.`);
-      return;
-    }
-
     aiProcessingSet.add(ticketId);
-
-    // Baseline count to ensure consistent increment
-    const beforeCount = aiResponseCountCache.get<number>(ticketId) ?? 0;
-
-    const aiUserId =
-      workflowCache.getAiUserId(ticket.module) ??
-      workflowCache.getFallbackAiUserId();
-
-    if (!aiUserId) {
-      aiProcessingSet.delete(ticketId);
-      sendWsMessage(ws, {
-        type: "error",
-        error: "Tentix Ai is not configured.",
-      });
-      return;
-    }
-
-    // Set timeout to auto-clear lock to avoid deadlocks
     const timeoutId = setTimeout(() => {
-      aiProcessingSet.delete(ticketId);
-      aiProcessingTimeouts.delete(ticketId);
+      clearAIInFlight(ticketId);
       logError(`AI processing timeout for ticket ${ticketId}`);
     }, AI_PROCESSING_TIMEOUT);
-
     aiProcessingTimeouts.set(ticketId, timeoutId);
 
-    runWithInterval(
-      () => getAIResponse(ticket),
-      () =>
-        broadcastToRoom(ticketId, {
-          type: "user_typing",
-          userId: aiUserId,
-          roomId: ticketId,
-          timestamp: Date.now(),
-        }),
-      2000,
-      async (result) => {
-        try {
-          const JSONContent = textToTipTapJSON(result.response);
-          const savedAIMessage = await saveMessageToDb(
-            ticketId,
-            aiUserId,
-            JSONContent,
-            false,
-          );
-          if (!savedAIMessage) {
-            return;
-          }
+    try {
+      // ai 不响应 closed 状态的工单 和 已经转人工的工单
+      const ticket = await db.query.tickets.findFirst({
+        where: (t, { eq }) => eq(t.id, ticketId),
+        columns: {
+          id: true,
+          title: true,
+          description: true,
+          module: true,
+          category: true,
+          status: true,
+        },
+      });
 
-          // Increment the AI response count for this ticket (use latest value)
-          const latest =
-            aiResponseCountCache.get<number>(ticketId) ?? beforeCount;
-          aiResponseCountCache.set(ticketId, latest + 1);
+      if (!ticket || ticket.status === "resolved") {
+        logInfo(`Ticket ${ticketId} is closed or not found, skip AI response.`);
+        clearAIInFlight(ticketId);
+        return;
+      }
 
-          broadcastToRoom(ticketId, {
-            type: "new_message",
-            messageId: savedAIMessage.id,
-            roomId: ticketId,
-            userId: aiUserId,
-            content: savedAIMessage.content,
-            timestamp: new Date(savedAIMessage.createdAt).getTime(),
-            isInternal: false,
-          });
+      const handoffRecord = await db.query.handoffRecords.findFirst({
+        where: (h, { eq }) => eq(h.ticketId, ticketId),
+        columns: {
+          id: true,
+          notificationSent: true,
+          handoffReason: false,
+          priority: false,
+          sentiment: false,
+        },
+      });
 
-          if (result.ragTrace) {
-            try {
-              const traceMessage = formatRagTraceMessage(
-                result.ragTrace,
-                savedAIMessage.id,
-              );
-              const savedTraceMessage = await saveMessageToDb(
-                ticketId,
-                aiUserId,
-                plainTextToTipTapJSON(traceMessage),
-                true,
-              );
-              if (savedTraceMessage) {
-                broadcastInternalMessage(ticketId, aiUserId, savedTraceMessage);
-              }
-            } catch (error) {
-              logError("Error saving RAG trace message:", error);
-            }
-          }
-        } finally {
-          // Always clear lock and timeout
-          aiProcessingSet.delete(ticketId);
-          const timeout = aiProcessingTimeouts.get(ticketId);
-          if (timeout) {
-            clearTimeout(timeout);
-            aiProcessingTimeouts.delete(ticketId);
-          }
-        }
-      },
-      (error: unknown) => {
-        logError("Error handling AI response:", error);
-        // Clear lock and timeout on error
-        aiProcessingSet.delete(ticketId);
-        const timeout = aiProcessingTimeouts.get(ticketId);
-        if (timeout) {
-          clearTimeout(timeout);
-          aiProcessingTimeouts.delete(ticketId);
-        }
+      if (handoffRecord?.notificationSent) {
+        logInfo(`Ticket ${ticketId} has already been handoff, skip AI response.`);
+        clearAIInFlight(ticketId);
+        return;
+      }
+
+      // Baseline count to ensure consistent increment
+      const beforeCount = aiResponseCountCache.get<number>(ticketId) ?? 0;
+
+      const aiUserId =
+        workflowCache.getAiUserId(ticket.module) ??
+        workflowCache.getFallbackAiUserId();
+
+      if (!aiUserId) {
+        clearAIInFlight(ticketId);
         sendWsMessage(ws, {
           type: "error",
-          error: "Some error occurred in AI response.",
+          error: "Tentix Ai is not configured.",
         });
-      },
-    );
+        return;
+      }
+
+      runWithInterval(
+        () => getAIResponse(ticket),
+        () =>
+          broadcastToRoom(ticketId, {
+            type: "user_typing",
+            userId: aiUserId,
+            roomId: ticketId,
+            timestamp: Date.now(),
+          }),
+        2000,
+        async (result) => {
+          try {
+            const JSONContent = textToTipTapJSON(result.response);
+            const savedAIMessage = await saveMessageToDb(
+              ticketId,
+              aiUserId,
+              JSONContent,
+              false,
+            );
+            if (!savedAIMessage) {
+              return;
+            }
+
+            // Increment the AI response count for this ticket (use latest value)
+            const latest =
+              aiResponseCountCache.get<number>(ticketId) ?? beforeCount;
+            aiResponseCountCache.set(ticketId, latest + 1);
+
+            broadcastToRoom(ticketId, {
+              type: "new_message",
+              messageId: savedAIMessage.id,
+              roomId: ticketId,
+              userId: aiUserId,
+              content: savedAIMessage.content,
+              timestamp: new Date(savedAIMessage.createdAt).getTime(),
+              isInternal: false,
+            });
+
+            if (result.ragTrace) {
+              try {
+                const traceMessage = formatRagTraceMessage(
+                  result.ragTrace,
+                  savedAIMessage.id,
+                );
+                const savedTraceMessage = await saveMessageToDb(
+                  ticketId,
+                  aiUserId,
+                  plainTextToTipTapJSON(traceMessage),
+                  true,
+                );
+                if (savedTraceMessage) {
+                  broadcastInternalMessage(ticketId, aiUserId, savedTraceMessage);
+                }
+              } catch (error) {
+                logError("Error saving RAG trace message:", error);
+              }
+            }
+          } finally {
+            // Always clear lock and timeout
+            clearAIInFlight(ticketId);
+          }
+        },
+        (error: unknown) => {
+          logError("Error handling AI response:", error);
+          // Clear lock and timeout on error
+          clearAIInFlight(ticketId);
+          sendWsMessage(ws, {
+            type: "error",
+            error: "Some error occurred in AI response.",
+          });
+        },
+      );
+    } catch (error) {
+      logError("Error preparing AI response:", error);
+      clearAIInFlight(ticketId);
+      sendWsMessage(ws, {
+        type: "error",
+        error: "Some error occurred in AI response.",
+      });
+    }
   }
 }
 
