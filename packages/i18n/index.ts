@@ -1,5 +1,5 @@
 import i18nBase from "i18next";
-import { initReactI18next, useTranslation } from "react-i18next";
+import { initReactI18next } from "react-i18next";
 export const translations = {
   en: {
     translation: {
@@ -1160,8 +1160,7 @@ export const i18next = i18nBase.use(initReactI18next).init({
 export default i18nBase;
 
 export function joinTrans(keys: string[]) {
-  const { i18n } = useTranslation();
-  const join = i18n.language === "zh" ? "" : " ";
+  const join = i18nBase.language === "zh" ? "" : " ";
   return keys.join(join);
 }
 
