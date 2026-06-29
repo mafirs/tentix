@@ -8,9 +8,19 @@ import { RouteTransition } from "@comp/page-transition";
 
 export const Route = createFileRoute("/user")({
   beforeLoad: async ({ context: { authContext } }) => {
-    if (authContext.user?.id === undefined || authContext.user === null) {
+    const currentUser = authContext.user;
+
+    if (currentUser?.id === undefined || currentUser === null) {
       redirect({
         to: "/",
+        throw: true,
+      });
+      return;
+    }
+
+    if (currentUser.role !== "customer") {
+      redirect({
+        to: "/staff/tickets/list",
         throw: true,
       });
     }

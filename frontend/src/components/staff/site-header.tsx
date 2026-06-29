@@ -1,7 +1,9 @@
 import { useTransferModal } from "@modal/use-transfer-modal";
 import { useUpdatePriorityModal } from "@modal/use-update-priority-modal";
 import { useTranslation } from "i18n";
+import { Link } from "@tanstack/react-router";
 import {
+  ArrowLeftIcon,
   PanelLeft,
   TriangleAlertIcon,
   LibraryBigIcon,
@@ -107,8 +109,19 @@ export function StaffSiteHeader({
   };
 
   return (
-    <header className="hidden md:flex h-14 w-full border-b items-center justify-between px-4 ">
-      <div className="flex items-center gap-1">
+    <header className="flex h-14 w-full border-b items-center justify-between gap-2 px-3 md:px-4">
+      <div className="flex min-w-0 items-center gap-1">
+        <Button
+          asChild
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 justify-center items-center rounded-md cursor-pointer flex md:hidden"
+          aria-label={t("go_back")}
+        >
+          <Link to="/staff/tickets/list">
+            <ArrowLeftIcon className="h-5 w-5" />
+          </Link>
+        </Button>
         {toggleSidebar && (
           <Button
             variant="ghost"
@@ -121,16 +134,16 @@ export function StaffSiteHeader({
           </Button>
         )}
         <h1
-          className="max-w-100 2xl:max-w-100 xl:max-w-100 lg:max-w-60 md:max-w-40 sm:max-w-20 truncate block 
-                       text-[#000] 
-                       text-[16px] 
-                       font-[600] 
+          className="max-w-[calc(100vw-72px)] md:max-w-40 lg:max-w-60 xl:max-w-100 2xl:max-w-100 truncate block
+                       text-[#000]
+                       text-[16px]
+                       font-[600]
                        leading-[100%]"
         >
           {ticket.title}
         </h1>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="hidden md:flex items-center gap-3">
         <div className="flex items-center h-10 rounded-lg border border-zinc-200">
           <Tooltip>
             <TooltipTrigger asChild>

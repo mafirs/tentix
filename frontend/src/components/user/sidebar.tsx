@@ -17,7 +17,7 @@ export function Sidebar() {
   const forumUrl = useForumUrl();
 
   return (
-    <div className="py-3 px-2 flex flex-col h-full items-center w-fit border-r-[0.8px] border-solid border-zinc-200 bg-zinc-50">
+    <div className="py-3 px-2 hidden md:flex flex-col h-full items-center w-fit border-r-[0.8px] border-solid border-zinc-200 bg-zinc-50">
       <div className="flex flex-col gap-2 items-center">
         <Button
           asChild

@@ -15,6 +15,8 @@ import { Sidebar } from "@comp/user/sidebar";
 import { PageTransition } from "@comp/page-transition";
 import { useAuth } from "src/_provider/auth";
 import { useSealos } from "src/_provider/sealos";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "tentix-ui";
+import { useTranslation } from "i18n";
 
 export const Route = createFileRoute("/user/tickets/$id")({
   component: RouteComponent,
@@ -22,6 +24,7 @@ export const Route = createFileRoute("/user/tickets/$id")({
 
 function RouteComponent() {
   const { id: ticketId } = Route.useParams();
+  const { t } = useTranslation();
   const { user } = useAuth();
   const {
     isSealos,
@@ -33,6 +36,7 @@ function RouteComponent() {
   const { setSessionMembers } = useSessionMembersStore();
   const { setCurrentTicketId, clearMessages } = useChatStore();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
   const { data: wsToken, isLoading: isWsTokenLoading } = useQuery({
     ...wsTokenQueryOptions({
@@ -97,14 +101,15 @@ function RouteComponent() {
             isCollapsed={isSidebarCollapsed}
             isTicketLoading={isTicketLoading}
           />
-          <div className="@container/main flex flex-1">
-            <div className="flex flex-col h-full w-[66%] xl:w-[74%]">
+          <div className="@container/main flex flex-1 min-w-0">
+            <div className="flex flex-col h-full w-full md:w-[66%] xl:w-[74%] min-w-0">
               <div className="flex-shrink-0">
                 <SiteHeader
                   title={ticket.title}
                   sidebarVisible={!isSidebarCollapsed}
                   toggleSidebar={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
                   ticket={ticket}
+                  onOpenDetails={() => setIsDetailsOpen(true)}
                 />
               </div>
               <UserChat
@@ -114,9 +119,17 @@ function RouteComponent() {
                 isTicketLoading={isTicketLoading}
               />
             </div>
-            <div className="flex flex-col h-full w-[34%] xl:w-[26%]">
+            <div className="hidden md:flex flex-col h-full w-[34%] xl:w-[26%]">
               <TicketDetailsSidebar ticket={ticket} />
             </div>
+            <Sheet open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+              <SheetContent className="w-[92vw] p-0 sm:max-w-md">
+                <SheetHeader className="sr-only">
+                  <SheetTitle>{t("info")}</SheetTitle>
+                </SheetHeader>
+                <TicketDetailsSidebar ticket={ticket} />
+              </SheetContent>
+            </Sheet>
           </div>
         </div>
       )}

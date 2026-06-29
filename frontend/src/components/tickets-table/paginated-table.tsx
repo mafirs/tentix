@@ -52,6 +52,7 @@ import {
   Input,
   ScrollArea,
   Switch,
+  useIsMobile,
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -136,6 +137,7 @@ export function PaginatedDataTable({
   const [isSmallScreen, setIsSmallScreen] = useState(
     typeof window !== "undefined" ? window.innerWidth < 1316 : false,
   );
+  const isMobile = useIsMobile();
 
   const { openTransferModal, transferModal } = useTransferModal();
   const { updatePriorityModal, openUpdatePriorityModal } =
@@ -144,6 +146,81 @@ export function PaginatedDataTable({
     useStaffCloseConfirmationModal();
   const { openCustomerFeedbackModal, customerFeedbackModal } =
     useCustomerFeedbackModal();
+
+  const renderTicketActions = React.useCallback(
+    (ticket: TicketsListItemType) => {
+      const ticketId = ticket.id;
+      const isResolved = ticket.status === "resolved";
+
+      return (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="flex size-8 text-muted-foreground data-[state=open]:bg-muted"
+              size="icon"
+            >
+              <EllipsisIcon className="!h-4 !w-4 text-zinc-500" />
+              <span className="sr-only">{t("open_menu")}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-auto p-2 rounded-xl">
+            {character === "staff" && (
+              <>
+                <DropdownMenuItem onClick={() => openTransferModal(ticketId)}>
+                  <ClipboardPasteIcon className="mr-2 !h-4 !w-4 text-zinc-500" />
+                  {t("transfer_ticket")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    openUpdatePriorityModal(
+                      ticketId,
+                      ticket.title.length > 6
+                        ? `${ticket.title.slice(0, 6)}...`
+                        : ticket.title,
+                      ticket.priority,
+                    )
+                  }
+                >
+                  <SquareAsteriskIcon className="mr-2 h-4 w-4 text-zinc-500" />
+                  {t("set_prty")}
+                </DropdownMenuItem>
+              </>
+            )}
+            <DropdownMenuItem
+              disabled={isResolved}
+              onSelect={(e) => {
+                if (isResolved) {
+                  e.preventDefault();
+                  return;
+                }
+                e.preventDefault();
+                if (character === "user") {
+                  openCustomerFeedbackModal(ticketId);
+                } else {
+                  openStaffCloseConfirmationModal(ticketId);
+                }
+              }}
+              className={isResolved ? "opacity-50 cursor-not-allowed" : ""}
+            >
+              <CircleStopIcon
+                className={`mr-2 h-4 w-4 ${isResolved ? "text-zinc-300" : "text-zinc-500"}`}
+              />
+              {joinTrans([t("close"), t("tkt_one")])}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      );
+    },
+    [
+      character,
+      t,
+      openTransferModal,
+      openUpdatePriorityModal,
+      openCustomerFeedbackModal,
+      openStaffCloseConfirmationModal,
+    ],
+  );
   // Listen for window resize to update screen size
   React.useEffect(() => {
     const handleResize = () => {
@@ -469,78 +546,7 @@ export function PaginatedDataTable({
         id: "actions",
         cell: ({ row }) => {
           const ticket = row.original;
-          const ticketId = ticket.id;
-          const isResolved = ticket.status === "resolved";
-
-          return (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    className="flex size-8 text-muted-foreground data-[state=open]:bg-muted"
-                    size="icon"
-                  >
-                    <EllipsisIcon className="!h-4 !w-4 text-zinc-500" />
-                    <span className="sr-only">{t("open_menu")}</span>
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  className="w-auto p-2 rounded-xl"
-                >
-                  {character === "staff" && (
-                    <>
-                      <DropdownMenuItem
-                        onClick={() => openTransferModal(ticketId)}
-                      >
-                        <ClipboardPasteIcon className="mr-2 !h-4 !w-4 text-zinc-500" />
-                        {t("transfer_ticket")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() =>
-                          openUpdatePriorityModal(
-                            ticketId,
-                            ticket.title.length > 6
-                              ? `${ticket.title.slice(0, 6)}...`
-                              : ticket.title,
-                            ticket.priority,
-                          )
-                        }
-                      >
-                        <SquareAsteriskIcon className="mr-2 h-4 w-4 text-zinc-500" />
-                        {t("set_prty")}
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  <DropdownMenuItem
-                    disabled={isResolved}
-                    onSelect={(e) => {
-                      if (isResolved) {
-                        e.preventDefault();
-                        return;
-                      }
-                      e.preventDefault();
-                      // Different dialogs for different user types
-                      if (character === "user") {
-                        openCustomerFeedbackModal(ticketId);
-                      } else {
-                        openStaffCloseConfirmationModal(ticketId);
-                      }
-                    }}
-                    className={
-                      isResolved ? "opacity-50 cursor-not-allowed" : ""
-                    }
-                  >
-                    <CircleStopIcon
-                      className={`mr-2 h-4 w-4 ${isResolved ? "text-zinc-300" : "text-zinc-500"}`}
-                    />
-                    {joinTrans([t("close"), t("tkt_one")])}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          );
+          return renderTicketActions(ticket);
         },
       },
     ];
@@ -580,10 +586,7 @@ export function PaginatedDataTable({
     setSorting,
     setAreaFilter,
     setModuleFilter,
-    openTransferModal,
-    openUpdatePriorityModal,
-    openStaffCloseConfirmationModal,
-    openCustomerFeedbackModal,
+    renderTicketActions,
   ]);
 
   const table = useReactTable({
@@ -604,6 +607,214 @@ export function PaginatedDataTable({
       >
         {count}
       </Badge>
+    );
+  };
+
+  const renderMobileCardContent = (
+    onClick: ((row: TicketsListItemType) => void) | undefined,
+    isSealosUserSearchEmpty: boolean,
+    hasActiveColumnControl: boolean,
+  ) => {
+    const rows = table.getRowModel().rows;
+    const currentLang = i18n.language === "zh" ? "zh-CN" : "en-US";
+    const formatDate = (value: string) =>
+      new Date(value).toLocaleString("sv-SE", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+    if (isLoading) {
+      return (
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="flex items-center justify-center text-zinc-500 text-sm font-medium">
+            <Loader2Icon className="h-4 w-4 animate-spin mr-2 text-zinc-500" />
+            {t("loading")}
+          </div>
+        </div>
+      );
+    }
+
+    if (rows.length === 0 && !hasActiveColumnControl) {
+      return (
+        <div className="flex-1 flex flex-col px-4 pb-4">
+          <div
+            className={cn(
+              "flex items-center justify-center border border-dashed border-zinc-300 rounded-lg bg-white relative h-full min-h-[320px]",
+              character === "user" ? "cursor-pointer" : "",
+            )}
+            onClick={() => {
+              if (character === "user") {
+                router.navigate({ to: "/user/newticket" });
+              }
+            }}
+          >
+            <div className="flex flex-col items-center justify-center text-center px-6">
+              <p className="text-black text-lg font-medium leading-7 mb-1">
+                {character === "user"
+                  ? t("no_tickets_created_yet")
+                  : isSealosUserSearchEmpty
+                    ? t("no_tickets_found_for_sealos_user")
+                    : t("no_tickets_found")}
+              </p>
+              {(character === "user" || !isSealosUserSearchEmpty) && (
+                <p className="text-gray-600 text-sm font-normal leading-5">
+                  {character === "user"
+                    ? t("click_to_create_ticket")
+                    : t("no_tickets_received")}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (rows.length === 0) {
+      return (
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="flex flex-col items-center justify-center text-center">
+            <p className="text-black text-lg font-medium leading-7 mb-1">
+              {isSealosUserSearchEmpty
+                ? t("no_tickets_found_for_sealos_user")
+                : t("no_tickets_found")}
+            </p>
+            {!isSealosUserSearchEmpty && (
+              <p className="text-gray-600 text-sm font-normal leading-5">
+                {t("no_tickets_received")}
+              </p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex-1 min-h-0 flex flex-col px-4 gap-3">
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="space-y-3 pb-2">
+            {rows.map((row) => {
+              const ticket = row.original;
+              const moduleText = getModuleTranslation(
+                ticket.module,
+                currentLang,
+                ticketModules,
+              );
+
+              return (
+                <div
+                  key={ticket.id}
+                  className={cn(
+                    "rounded-lg border border-zinc-200 bg-white p-4 text-left shadow-sm transition-colors",
+                    onClick ? "cursor-pointer active:bg-zinc-50" : "",
+                  )}
+                  onClick={(e) => {
+                    if (!onClick) return;
+                    if (
+                      e.target instanceof HTMLElement &&
+                      (e.target.closest("button") ||
+                        e.target.closest("a") ||
+                        e.target.closest('[role="menuitem"]') ||
+                        e.target.closest("[data-radix-popper-content-wrapper]"))
+                    ) {
+                      return;
+                    }
+                    onClick(ticket);
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <StatusBadge status={ticket.status} />
+                        {character === "staff" && (
+                          <PriorityBadge priority={ticket.priority} />
+                        )}
+                      </div>
+                      <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-900">
+                        {ticket.title}
+                      </h3>
+                    </div>
+                    <div className="shrink-0">{renderTicketActions(ticket)}</div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs leading-4">
+                    <div>
+                      <p className="text-zinc-500">{t("updated_at")}</p>
+                      <p className="mt-1 truncate text-zinc-900">
+                        {formatDate(ticket.updatedAt)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">{t("created_at")}</p>
+                      <p className="mt-1 truncate text-zinc-900">
+                        {formatDate(ticket.createdAt)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">{t("module")}</p>
+                      <p className="mt-1 truncate text-zinc-900">{moduleText}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">{t("area")}</p>
+                      <p className="mt-1 truncate text-zinc-900">{ticket.area}</p>
+                    </div>
+                    {character === "staff" && (
+                      <div className="col-span-2">
+                        <p className="text-zinc-500">{t("rqst_by")}</p>
+                        <p className="mt-1 truncate text-zinc-900">
+                          {ticket.customer.name}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </ScrollArea>
+
+        <div className="flex-shrink-0 flex items-center justify-between py-3">
+          <div className="text-sm font-normal leading-normal text-zinc-500">
+            {t("total")}: {totalCount}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(currentPage - 1)}
+              disabled={currentPage <= 1 || isLoading}
+            >
+              <ChevronLeftIcon
+                className={`h-4 w-4 ${currentPage <= 1 || isLoading ? "text-zinc-300" : "text-zinc-900"}`}
+              />
+            </Button>
+            <div className="flex items-center text-sm mx-1">
+              <span className="text-zinc-900 font-medium leading-normal">
+                {currentPage}
+              </span>
+              <span className="text-zinc-500 font-medium leading-normal mx-1">
+                /
+              </span>
+              <span className="text-zinc-500 font-medium leading-normal">
+                {totalPages}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(currentPage + 1)}
+              disabled={currentPage >= totalPages || isLoading}
+            >
+              <ChevronRightIcon
+                className={`h-4 w-4 ${currentPage >= totalPages || isLoading ? "text-zinc-300" : "text-zinc-900"}`}
+              />
+            </Button>
+          </div>
+        </div>
+      </div>
     );
   };
 
@@ -630,6 +841,14 @@ export function PaginatedDataTable({
       Boolean(effectiveSearchQuery.trim());
     const hasActiveColumnControl =
       character === "staff" && Boolean(sortBy || areaFilter || moduleFilter);
+
+    if (isMobile) {
+      return renderMobileCardContent(
+        onClick,
+        isSealosUserSearchEmpty,
+        hasActiveColumnControl,
+      );
+    }
 
     if (rows.length === 0 && !isLoading && !hasActiveColumnControl) {
       return (
@@ -898,11 +1117,11 @@ export function PaginatedDataTable({
   return (
     <div className="h-full flex flex-1 flex-col min-w-0 bg-zinc-50">
       {/* Header - Fixed */}
-      <div className="flex-shrink-0 flex items-center justify-between px-4 lg:px-6 h-24 bg-zinc-50">
-        <div className="flex flex-wrap gap-2">
+      <div className="flex-shrink-0 flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 lg:px-6 py-3 md:h-24 bg-zinc-50">
+        <div className="flex w-full md:w-auto gap-2 overflow-x-auto md:flex-wrap md:overflow-visible pb-1 md:pb-0">
           <button
             onClick={() => setStatuses([])}
-            className={`h-10 flex justify-center items-center gap-2 self-stretch px-3 rounded-lg border border-zinc-200 transition-colors ${
+            className={`h-10 shrink-0 flex justify-center items-center gap-2 self-stretch px-3 rounded-lg border border-zinc-200 transition-colors ${
               statuses.length === 0 ? "bg-black/[0.03]" : "hover:bg-zinc-50"
             }`}
           >
@@ -931,7 +1150,7 @@ export function PaginatedDataTable({
           </button>
           <button
             onClick={() => handleStatusToggle("pending")}
-            className={`flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
+            className={`h-10 shrink-0 flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
               statuses.includes("pending")
                 ? "bg-black/[0.03]"
                 : "hover:bg-zinc-50"
@@ -955,7 +1174,7 @@ export function PaginatedDataTable({
           </button>
           <button
             onClick={() => handleStatusToggle("in_progress")}
-            className={`flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
+            className={`h-10 shrink-0 flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
               statuses.includes("in_progress")
                 ? "bg-black/[0.03]"
                 : "hover:bg-zinc-50"
@@ -981,7 +1200,7 @@ export function PaginatedDataTable({
           </button>
           <button
             onClick={() => handleStatusToggle("resolved")}
-            className={`flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
+            className={`h-10 shrink-0 flex justify-center items-center gap-2 self-stretch px-3 py-1 rounded-lg border border-zinc-200 transition-colors ${
               statuses.includes("resolved")
                 ? "bg-black/[0.03]"
                 : "hover:bg-zinc-50"
@@ -1008,7 +1227,7 @@ export function PaginatedDataTable({
         </div>
 
         {/* search */}
-        <div className="flex items-center gap-3">
+        <div className="flex w-full md:w-auto items-center gap-2 md:gap-3">
           {character !== "user" && (
             <TooltipProvider>
               <Tooltip>
@@ -1032,7 +1251,7 @@ export function PaginatedDataTable({
             </TooltipProvider>
           )}
           {character === "staff" ? (
-            <div className="flex h-10 overflow-hidden rounded-lg border border-zinc-200 bg-white">
+            <div className="flex h-10 w-full md:w-auto overflow-hidden rounded-lg border border-zinc-200 bg-white">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1054,7 +1273,7 @@ export function PaginatedDataTable({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <div className="relative">
+              <div className="relative flex-1 md:flex-none">
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder={
@@ -1062,18 +1281,18 @@ export function PaginatedDataTable({
                       ? "Sealos ID"
                       : searchTicketsPlaceholder
                   }
-                  className="h-full w-56 rounded-none border-0 pl-10 pr-3 text-sm leading-none focus-visible:ring-0"
+                  className="h-full w-full md:w-56 rounded-none border-0 pl-10 pr-3 text-sm leading-none focus-visible:ring-0"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
             </div>
           ) : (
-            <div className="relative">
+            <div className="relative flex-1 md:flex-none">
               <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder={searchTicketsPlaceholder}
-                className="pl-10 pr-3 text-sm leading-none h-10 rounded-lg"
+                className="w-full pl-10 pr-3 text-sm leading-none h-10 rounded-lg"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -1085,7 +1304,7 @@ export function PaginatedDataTable({
               <Button
                 variant="default"
                 size="sm"
-                className="h-[40px] px-4 gap-2 flex justify-center items-center rounded-lg shadow-[0px_1px_2px_0px_rgba(0,0,0,0.05)] border-none"
+                className="h-[40px] shrink-0 px-4 gap-2 flex justify-center items-center rounded-lg shadow-[0px_1px_2px_0px_rgba(0,0,0,0.05)] border-none"
               >
                 <PlusIcon className="w-4 h-4" />
                 <span className="hidden lg:inline">
