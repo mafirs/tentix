@@ -766,16 +766,24 @@ export function PaginatedDataTable({
                       <p className="text-zinc-500">{t("area")}</p>
                       <p className="mt-1 truncate text-zinc-900">{regionText}</p>
                     </div>
-                    <div>
-                      <p className="text-zinc-500">{t("assignees")}</p>
-                      <p className="mt-1 truncate text-zinc-900">{assigneeName}</p>
-                    </div>
+                    {character === "user" && (
+                      <div>
+                        <p className="text-zinc-500">{t("assignees")}</p>
+                        <p className="mt-1 truncate text-zinc-900">{assigneeName}</p>
+                      </div>
+                    )}
                     {character === "staff" && (
-                      <div className="col-span-2">
-                        <p className="text-zinc-500">{t("rqst_by")}</p>
-                        <p className="mt-1 truncate text-zinc-900">
-                          {ticket.customer.name}
-                        </p>
+                      <div className="col-span-2 grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-zinc-500">{t("assignees")}</p>
+                          <p className="mt-1 truncate text-zinc-900">{assigneeName}</p>
+                        </div>
+                        <div>
+                          <p className="text-zinc-500">{t("rqst_by")}</p>
+                          <p className="mt-1 truncate text-zinc-900">
+                            {ticket.customer.name}
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>
