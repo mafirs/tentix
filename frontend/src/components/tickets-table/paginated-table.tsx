@@ -702,6 +702,9 @@ export function PaginatedDataTable({
                 currentLang,
                 ticketModules,
               );
+              const regionText = ticket.sealosNamespace
+                ? `${ticket.area}/${ticket.sealosNamespace}`
+                : ticket.area;
 
               return (
                 <div
@@ -735,6 +738,9 @@ export function PaginatedDataTable({
                       <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-900">
                         {ticket.title}
                       </h3>
+                      <p className="mt-1 truncate text-xs leading-4 text-zinc-500">
+                        ID: {ticket.id}
+                      </p>
                     </div>
                     <div className="shrink-0">{renderTicketActions(ticket)}</div>
                   </div>
@@ -757,7 +763,7 @@ export function PaginatedDataTable({
                     </div>
                     <div>
                       <p className="text-zinc-500">{t("area")}</p>
-                      <p className="mt-1 truncate text-zinc-900">{ticket.area}</p>
+                      <p className="mt-1 truncate text-zinc-900">{regionText}</p>
                     </div>
                     {character === "staff" && (
                       <div className="col-span-2">
