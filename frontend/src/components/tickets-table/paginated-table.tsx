@@ -705,6 +705,7 @@ export function PaginatedDataTable({
               const regionText = ticket.sealosNamespace
                 ? `${ticket.area}/${ticket.sealosNamespace}`
                 : ticket.area;
+              const assigneeName = ticket.agent.nickname || ticket.agent.name;
 
               return (
                 <div
@@ -764,6 +765,10 @@ export function PaginatedDataTable({
                     <div>
                       <p className="text-zinc-500">{t("area")}</p>
                       <p className="mt-1 truncate text-zinc-900">{regionText}</p>
+                    </div>
+                    <div>
+                      <p className="text-zinc-500">{t("assignees")}</p>
+                      <p className="mt-1 truncate text-zinc-900">{assigneeName}</p>
                     </div>
                     {character === "staff" && (
                       <div className="col-span-2">
