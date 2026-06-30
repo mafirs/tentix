@@ -437,6 +437,12 @@ try {
       historyMessages: variables.historyMessages,
       latestMessage: variables.lastCustomerMessage,
       latestMessageImages,
+      retrievedKnowledge: {
+        count: variables.retrievedContextCount,
+        text: variables.retrievedContextString,
+        items: variables.retrievedContext,
+        trace: variables.ragTrace,
+      },
     };
 
     const headers: Record<string, string> = {
