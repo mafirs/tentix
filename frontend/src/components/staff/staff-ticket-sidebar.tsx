@@ -122,6 +122,10 @@ export function StaffTicketSidebar({
     readStatus,
     allTicket,
     searchMode,
+    sortBy,
+    sortOrder,
+    areaFilter,
+    moduleFilter,
     setSearchQuery,
     setSearchMode,
     setStatuses,
@@ -152,6 +156,12 @@ export function StaffTicketSidebar({
       allTicket,
       currentTicketId,
       requestSearchMode,
+      {
+        sortBy,
+        sortOrder,
+        area: areaFilter,
+        module: moduleFilter,
+      },
     ),
   );
 
@@ -282,11 +292,6 @@ export function StaffTicketSidebar({
   };
 
   const tickets = (userTicketsData?.tickets || []) as StaffTicketsListItemType[];
-
-  // Sort tickets by updated time
-  const sortedTickets = [...tickets].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
 
   return (
     <div
@@ -513,7 +518,7 @@ export function StaffTicketSidebar({
                 {t("loading")}
               </div>
             ) : (
-              sortedTickets.map((ticket) => {
+              tickets.map((ticket) => {
                 const statusDisplay = getStatusDisplay(ticket.status, t);
                 const isUnread = isTicketUnread(ticket);
                 const isSelected = ticket.id === currentTicketId;
