@@ -882,6 +882,20 @@ const chatRouter = factory
                     return;
                   }
 
+                  if (
+                    role === "customer" &&
+                    parsedMessage.sealosKubeconfig &&
+                    parsedMessage.sealosKubeconfig.trim()
+                  ) {
+                    setUserSealosKubeconfig(userId, parsedMessage.sealosKubeconfig);
+                    bindTicketSealosKubeconfig(
+                      ticketId,
+                      clientId,
+                      userId,
+                      parsedMessage.sealosKubeconfig,
+                    );
+                  }
+
                   // Save message to database
                   const messageResult = await saveMessageToDb(
                     ticketId,

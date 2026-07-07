@@ -2,14 +2,14 @@ import { UserChat } from "@comp/chat/user/index.tsx";
 import { SiteHeader } from "@comp/user/header.tsx";
 import { TicketDetailsSidebar } from "@comp/user/ticket-details-sidebar";
 import { UserTicketSidebar } from "@comp/user/user-ticket-sidebar.tsx";
-import { ticketsQueryOptions, wsTokenQueryOptions } from "@lib/query";
+import { fetchWsToken, ticketsQueryOptions, wsTokenQueryOptions } from "@lib/query";
 import {
   useSessionMembersStore,
   useTicketStore,
   useChatStore,
 } from "@store/index.ts";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "@comp/user/sidebar";
 import { PageTransition } from "@comp/page-transition";
@@ -38,15 +38,34 @@ function RouteComponent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
+  const getSealosKubeconfigForWsToken = useCallback(async () => {
+    const latest = await refreshSealosSession();
+    return latest?.sealosKubeconfig ?? sealosKubeconfig;
+  }, [refreshSealosSession, sealosKubeconfig]);
+
+  const refreshConnectionAuth = useCallback(async () => {
+    const latestSealosKubeconfig = isSealos
+      ? await getSealosKubeconfigForWsToken()
+      : null;
+    const nextWsToken = await fetchWsToken({
+      testUserId: user?.id?.toString(),
+      getSealosKubeconfig: latestSealosKubeconfig
+        ? async () => latestSealosKubeconfig
+        : undefined,
+    });
+
+    return {
+      token: nextWsToken.token,
+      sealosKubeconfig: latestSealosKubeconfig,
+    };
+  }, [getSealosKubeconfigForWsToken, isSealos, user?.id]);
+
   const { data: wsToken, isLoading: isWsTokenLoading } = useQuery({
     ...wsTokenQueryOptions({
       testUserId: user?.id?.toString(),
       ticketId,
       getSealosKubeconfig: isSealos
-        ? async () => {
-            const latest = await refreshSealosSession();
-            return latest?.sealosKubeconfig ?? sealosKubeconfig;
-          }
+        ? getSealosKubeconfigForWsToken
         : undefined,
     }),
     enabled: !!user && (!isSealos || isInitialized),
@@ -115,6 +134,11 @@ function RouteComponent() {
               <UserChat
                 ticket={ticket}
                 token={wsToken.token}
+                sealosKubeconfig={isSealos ? sealosKubeconfig : null}
+                refreshSealosKubeconfig={
+                  isSealos ? getSealosKubeconfigForWsToken : undefined
+                }
+                refreshConnectionAuth={refreshConnectionAuth}
                 key={ticketId}
                 isTicketLoading={isTicketLoading}
               />

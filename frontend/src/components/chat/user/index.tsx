@@ -16,10 +16,19 @@ import { usePreloadAvatars } from "@comp/common/cached-avatar.tsx";
 export function UserChat({
   ticket,
   token,
+  sealosKubeconfig,
+  refreshSealosKubeconfig,
+  refreshConnectionAuth,
   isTicketLoading,
 }: {
   ticket: TicketType;
   token: string;
+  sealosKubeconfig?: string | null;
+  refreshSealosKubeconfig?: () => Promise<string | null>;
+  refreshConnectionAuth?: () => Promise<{
+    token: string;
+    sealosKubeconfig: string | null;
+  }>;
   isTicketLoading: boolean;
 }) {
   const { t } = useTranslation();
@@ -70,6 +79,9 @@ export function UserChat({
   } = useTicketWebSocket({
     ticketId: ticket.id,
     token,
+    sealosKubeconfig,
+    refreshSealosKubeconfig,
+    refreshConnectionAuth,
     userId,
     onUserTyping: handleUserTyping,
     onError: (error) => console.error("WebSocket error:", error),

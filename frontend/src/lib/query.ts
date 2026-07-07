@@ -227,6 +227,43 @@ type WsTokenQueryOptionsConfig = {
   getSealosKubeconfig?: () => Promise<string | null>;
 };
 
+export async function fetchWsToken({
+  testUserId,
+  getSealosKubeconfig,
+}: Pick<WsTokenQueryOptionsConfig, "testUserId" | "getSealosKubeconfig">) {
+  let headers: Record<string, string> | undefined;
+
+  if (getSealosKubeconfig) {
+    try {
+      const sealosKubeconfig = await getSealosKubeconfig();
+      if (sealosKubeconfig) {
+        headers = {
+          "x-sealos-kubeconfig": encodeURIComponent(sealosKubeconfig),
+        };
+      }
+    } catch (error) {
+      console.warn(
+        "Failed to get sealos kubeconfig for ws token request:",
+        error,
+      );
+    }
+  }
+
+  const res = await apiClient.chat.token.$get(
+    { query: { testUserId } },
+    headers ? { headers } : undefined,
+  );
+
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as {
+      message?: string;
+    };
+    throw new Error(err.message || "Failed to get ws token");
+  }
+
+  return await res.json();
+}
+
 export const wsTokenQueryOptions = ({
   testUserId,
   ticketId,
@@ -239,39 +276,11 @@ export const wsTokenQueryOptions = ({
       testUserId ?? "",
       getSealosKubeconfig ? "with-sealos-kc" : "without-sealos-kc",
     ],
-    queryFn: async () => {
-      let headers: Record<string, string> | undefined;
-
-      if (getSealosKubeconfig) {
-        try {
-          const sealosKubeconfig = await getSealosKubeconfig();
-          if (sealosKubeconfig) {
-            headers = {
-              "x-sealos-kubeconfig": encodeURIComponent(sealosKubeconfig),
-            };
-          }
-        } catch (error) {
-          console.warn(
-            "Failed to get sealos kubeconfig for ws token request:",
-            error,
-          );
-        }
-      }
-
-      const res = await apiClient.chat.token.$get(
-        { query: { testUserId } },
-        headers ? { headers } : undefined,
-      );
-
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as {
-          message?: string;
-        };
-        throw new Error(err.message || "Failed to get ws token");
-      }
-
-      return await res.json();
-    },
+    queryFn: async () =>
+      fetchWsToken({
+        testUserId,
+        getSealosKubeconfig,
+      }),
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
