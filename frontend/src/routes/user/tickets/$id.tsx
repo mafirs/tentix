@@ -29,6 +29,8 @@ function RouteComponent() {
   const {
     isSealos,
     isInitialized,
+    sealosToken,
+    sealosArea,
     sealosKubeconfig,
     refreshSealosSession,
   } = useSealos();
@@ -38,34 +40,40 @@ function RouteComponent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
-  const getSealosKubeconfigForWsToken = useCallback(async () => {
+  const getSealosCredentialsForWsToken = useCallback(async () => {
     const latest = await refreshSealosSession();
-    return latest?.sealosKubeconfig ?? sealosKubeconfig;
-  }, [refreshSealosSession, sealosKubeconfig]);
+    if (latest?.sealosToken && latest.sealosKubeconfig) {
+      return {
+        token: latest.sealosToken,
+        kubeconfig: latest.sealosKubeconfig,
+      };
+    }
+    if (sealosToken && sealosKubeconfig) {
+      return { token: sealosToken, kubeconfig: sealosKubeconfig };
+    }
+    return null;
+  }, [refreshSealosSession, sealosKubeconfig, sealosToken]);
 
   const refreshConnectionAuth = useCallback(async () => {
-    const latestSealosKubeconfig = isSealos
-      ? await getSealosKubeconfigForWsToken()
-      : null;
     const nextWsToken = await fetchWsToken({
       testUserId: user?.id?.toString(),
-      getSealosKubeconfig: latestSealosKubeconfig
-        ? async () => latestSealosKubeconfig
+      getSealosCredentials: isSealos
+        ? getSealosCredentialsForWsToken
         : undefined,
     });
 
     return {
       token: nextWsToken.token,
-      sealosKubeconfig: latestSealosKubeconfig,
     };
-  }, [getSealosKubeconfigForWsToken, isSealos, user?.id]);
+  }, [getSealosCredentialsForWsToken, isSealos, user?.id]);
 
   const { data: wsToken, isLoading: isWsTokenLoading } = useQuery({
     ...wsTokenQueryOptions({
       testUserId: user?.id?.toString(),
       ticketId,
-      getSealosKubeconfig: isSealos
-        ? getSealosKubeconfigForWsToken
+      sealosArea: isSealos ? sealosArea : null,
+      getSealosCredentials: isSealos
+        ? getSealosCredentialsForWsToken
         : undefined,
     }),
     enabled: !!user && (!isSealos || isInitialized),
@@ -134,10 +142,6 @@ function RouteComponent() {
               <UserChat
                 ticket={ticket}
                 token={wsToken.token}
-                sealosKubeconfig={isSealos ? sealosKubeconfig : null}
-                refreshSealosKubeconfig={
-                  isSealos ? getSealosKubeconfigForWsToken : undefined
-                }
                 refreshConnectionAuth={refreshConnectionAuth}
                 key={ticketId}
                 isTicketLoading={isTicketLoading}

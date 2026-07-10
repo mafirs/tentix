@@ -221,29 +221,38 @@ export const ticketsQueryOptions = (id: string) =>
     refetchOnWindowFocus: true, // 窗口聚焦时重新获取
   });
 
+type SealosWsCredentials = {
+  token: string;
+  kubeconfig: string;
+};
+
 type WsTokenQueryOptionsConfig = {
   testUserId?: string;
   ticketId: string;
-  getSealosKubeconfig?: () => Promise<string | null>;
+  sealosArea?: string | null;
+  getSealosCredentials?: () => Promise<SealosWsCredentials | null>;
 };
 
 export async function fetchWsToken({
   testUserId,
-  getSealosKubeconfig,
-}: Pick<WsTokenQueryOptionsConfig, "testUserId" | "getSealosKubeconfig">) {
+  getSealosCredentials,
+}: Pick<WsTokenQueryOptionsConfig, "testUserId" | "getSealosCredentials">) {
   let headers: Record<string, string> | undefined;
 
-  if (getSealosKubeconfig) {
+  if (getSealosCredentials) {
     try {
-      const sealosKubeconfig = await getSealosKubeconfig();
-      if (sealosKubeconfig) {
+      const sealosCredentials = await getSealosCredentials();
+      if (sealosCredentials) {
         headers = {
-          "x-sealos-kubeconfig": encodeURIComponent(sealosKubeconfig),
+          "x-sealos-token": encodeURIComponent(sealosCredentials.token),
+          "x-sealos-kubeconfig": encodeURIComponent(
+            sealosCredentials.kubeconfig,
+          ),
         };
       }
     } catch (error) {
       console.warn(
-        "Failed to get sealos kubeconfig for ws token request:",
+        "Failed to get sealos credentials for ws token request:",
         error,
       );
     }
@@ -267,19 +276,23 @@ export async function fetchWsToken({
 export const wsTokenQueryOptions = ({
   testUserId,
   ticketId,
-  getSealosKubeconfig,
+  sealosArea,
+  getSealosCredentials,
 }: WsTokenQueryOptionsConfig) =>
   queryOptions({
     queryKey: [
       "getWsToken",
       ticketId,
       testUserId ?? "",
-      getSealosKubeconfig ? "with-sealos-kc" : "without-sealos-kc",
+      sealosArea ?? "",
+      getSealosCredentials
+        ? "with-sealos-credentials"
+        : "without-sealos-credentials",
     ],
     queryFn: async () =>
       fetchWsToken({
         testUserId,
-        getSealosKubeconfig,
+        getSealosCredentials,
       }),
     staleTime: 0,
     refetchOnMount: "always",

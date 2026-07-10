@@ -17,18 +17,14 @@ const WITHDRAW_RECONCILE_DELAY_MS = 1200;
 const WS_CONNECT_TIMEOUT_MS = 8000;
 const WS_TOKEN_EXPIRED_CLOSE_CODE = 4002;
 const WS_TOKEN_EXPIRED_CLOSE_REASON = "Invalid or expired WebSocket token.";
-const SEALOS_KUBECONFIG_REFRESH_TIMEOUT_MS = 800;
 
 type RefreshedConnectionAuth = {
   token: string;
-  sealosKubeconfig: string | null;
 };
 
 interface UseTicketWebSocketProps {
   ticketId: string | null;
   token: string;
-  sealosKubeconfig?: string | null;
-  refreshSealosKubeconfig?: () => Promise<string | null>;
   refreshConnectionAuth?: () => Promise<RefreshedConnectionAuth>;
   userId: number;
   onUserTyping: (userId: number, status: "start" | "stop") => void;
@@ -52,8 +48,6 @@ interface UseTicketWebSocketReturn {
 export function useTicketWebSocket({
   ticketId,
   token,
-  sealosKubeconfig,
-  refreshSealosKubeconfig,
   refreshConnectionAuth,
   userId,
   onUserTyping,
@@ -76,15 +70,9 @@ export function useTicketWebSocket({
     null,
   );
   const latestTokenRef = useRef(token);
-  const latestSealosKubeconfigRef = useRef<string | null>(
-    sealosKubeconfig ?? null,
-  );
   const refreshConnectionAuthRef = useRef(refreshConnectionAuth);
-  const refreshSealosKubeconfigRef = useRef(refreshSealosKubeconfig);
   const refreshConnectionAuthPromiseRef =
     useRef<Promise<RefreshedConnectionAuth | null> | null>(null);
-  const refreshSealosKubeconfigPromiseRef =
-    useRef<Promise<string | null> | null>(null);
 
   // 业务相关
   const pendingMessagesRef = useRef<
@@ -116,18 +104,8 @@ export function useTicketWebSocket({
   }, [token]);
 
   useEffect(() => {
-    if (sealosKubeconfig) {
-      latestSealosKubeconfigRef.current = sealosKubeconfig;
-    }
-  }, [sealosKubeconfig]);
-
-  useEffect(() => {
     refreshConnectionAuthRef.current = refreshConnectionAuth;
   }, [refreshConnectionAuth]);
-
-  useEffect(() => {
-    refreshSealosKubeconfigRef.current = refreshSealosKubeconfig;
-  }, [refreshSealosKubeconfig]);
 
   const clearOpenConnectionWaiter = useCallback(() => {
     if (connectTimeoutRef.current) {
@@ -193,9 +171,6 @@ export function useTicketWebSocket({
       refreshConnectionAuthPromiseRef.current = refreshAuth()
         .then((result) => {
           latestTokenRef.current = result.token;
-          if (result.sealosKubeconfig) {
-            latestSealosKubeconfigRef.current = result.sealosKubeconfig;
-          }
           return result;
         })
         .catch((error) => {
@@ -209,55 +184,6 @@ export function useTicketWebSocket({
 
     return refreshConnectionAuthPromiseRef.current;
   }, []);
-
-  const refreshSealosKubeconfigData = useCallback(async () => {
-    const refreshKubeconfig = refreshSealosKubeconfigRef.current;
-    if (!refreshKubeconfig) {
-      return latestSealosKubeconfigRef.current;
-    }
-
-    if (!refreshSealosKubeconfigPromiseRef.current) {
-      refreshSealosKubeconfigPromiseRef.current = refreshKubeconfig()
-        .then((nextKubeconfig) => {
-          if (nextKubeconfig) {
-            latestSealosKubeconfigRef.current = nextKubeconfig;
-          }
-          return nextKubeconfig ?? latestSealosKubeconfigRef.current;
-        })
-        .catch((error) => {
-          console.warn("Failed to refresh sealos kubeconfig:", error);
-          return latestSealosKubeconfigRef.current;
-        })
-        .finally(() => {
-          refreshSealosKubeconfigPromiseRef.current = null;
-        });
-    }
-
-    return refreshSealosKubeconfigPromiseRef.current;
-  }, []);
-
-  const getSealosKubeconfigForMessage = useCallback(async () => {
-    const current = latestSealosKubeconfigRef.current;
-    if (current) {
-      void refreshSealosKubeconfigData();
-      return current;
-    }
-
-    if (!refreshSealosKubeconfigRef.current) {
-      return null;
-    }
-
-    return new Promise<string | null>((resolve) => {
-      const timeoutId = setTimeout(() => {
-        resolve(latestSealosKubeconfigRef.current);
-      }, SEALOS_KUBECONFIG_REFRESH_TIMEOUT_MS);
-
-      void refreshSealosKubeconfigData().then((nextKubeconfig) => {
-        clearTimeout(timeoutId);
-        resolve(nextKubeconfig);
-      });
-    });
-  }, [refreshSealosKubeconfigData]);
 
   const reconcilePendingWithdrawals = useCallback(() => {
     if (withdrawRevalidateTimerRef.current) {
@@ -654,7 +580,6 @@ export function useTicketWebSocket({
       }
 
       const ws = await ensureConnected();
-      const sealosKubeconfigForMessagePromise = getSealosKubeconfigForMessage();
 
       return new Promise((resolve, reject) => {
         // 设置超时
@@ -679,44 +604,27 @@ export function useTicketWebSocket({
           feedbacks: [],
         });
 
-        void sealosKubeconfigForMessagePromise.then(
-          (sealosKubeconfigForMessage) => {
-            if (!pendingMessagesRef.current.has(tempId)) {
-              return;
-            }
+        if (ws.readyState !== WebSocket.OPEN) {
+          pendingMessagesRef.current.delete(tempId);
+          clearTimeout(timeoutId);
+          reject(new Error("连接已断开"));
+          return;
+        }
 
-            if (ws.readyState !== WebSocket.OPEN) {
-              pendingMessagesRef.current.delete(tempId);
-              clearTimeout(timeoutId);
-              reject(new Error("连接已断开"));
-              return;
-            }
-
-            // 发送到服务器
-            ws.send(
-              JSON.stringify({
-                type: "message",
-                content,
-                userId,
-                ticketId,
-                tempId,
-                isInternal,
-                ...(sealosKubeconfigForMessage
-                  ? { sealosKubeconfig: sealosKubeconfigForMessage }
-                  : {}),
-              }),
-            );
-          },
+        // 发送到服务器
+        ws.send(
+          JSON.stringify({
+            type: "message",
+            content,
+            userId,
+            ticketId,
+            tempId,
+            isInternal,
+          }),
         );
       });
     },
-    [
-      ticketId,
-      userId,
-      sendNewMessage,
-      ensureConnected,
-      getSealosKubeconfigForMessage,
-    ],
+    [ticketId, userId, sendNewMessage, ensureConnected],
   );
 
   // 发送输入状态

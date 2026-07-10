@@ -261,7 +261,6 @@ export const wsMsgClientSchema = z.discriminatedUnion("type", [
     timestamp: z.number().optional(),
     tempId: z.number().optional(),
     isInternal: z.boolean().optional(),
-    sealosKubeconfig: z.string().optional(),
   }),
   z.object({
     type: z.literal("typing"),

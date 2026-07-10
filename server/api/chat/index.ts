@@ -1,7 +1,7 @@
 /* eslint-disable drizzle/enforce-delete-with-where */
 import * as schema from "@/db/schema.ts";
 import { MyCache } from "@/utils/cache.ts";
-import { WS_TOKEN_EXPIRY_TIME } from "@/utils/const.ts";
+import { areaRegionUuidMap, WS_TOKEN_EXPIRY_TIME } from "@/utils/const.ts";
 import {
   connectDB,
   logError,
@@ -13,6 +13,7 @@ import {
   withdrawMessage,
 } from "@/utils/index.ts";
 import { getAIResponse, workflowCache } from "@/utils/kb/workflow-cache.ts";
+import { parseSealosJWT } from "@/utils/jwt.ts";
 import type { RagTrace, RagTraceHit } from "@/utils/kb/types.ts";
 import { runWithInterval } from "@/utils/runtime.ts";
 import { upgradeWebSocket, WS_CLOSE_CODE } from "@/utils/websocket.ts";
@@ -36,10 +37,8 @@ import { streamSSE } from "hono/streaming";
 import NodeCache from "node-cache";
 import { z } from "zod";
 import {
-  bindTicketSealosKubeconfig,
-  getUserSealosKubeconfig,
   setUserSealosKubeconfig,
-  unbindTicketSealosKubeconfig,
+  touchUserSealosKubeconfig,
 } from "@/utils/sealos-kubeconfig-session.ts";
 import { authMiddleware, factory } from "../middleware.ts";
 import { sendUnreadSSE, sendWsMessage, wsInstance } from "./tools.ts";
@@ -63,15 +62,21 @@ interface TokenData {
   userId: number;
   role: userRoleType;
   expiresAt: number;
+  sealosArea?: string;
 }
 
 const tokenMap = new Map<string, TokenData>();
 
-const generateToken = (userId: number, role: userRoleType): string => {
+const generateToken = (
+  userId: number,
+  role: userRoleType,
+  sealosArea?: string,
+): string => {
   const token = crypto.randomUUID();
   tokenMap.set(token, {
     userId,
     role,
+    ...(sealosArea ? { sealosArea } : {}),
     expiresAt: Date.now() + WS_TOKEN_EXPIRY_TIME,
   });
   return token;
@@ -688,22 +693,83 @@ const chatRouter = factory
       const role = c.var.role;
 
       const rawSealosKubeconfig = c.req.header("x-sealos-kubeconfig");
-      if (rawSealosKubeconfig) {
+      const rawSealosToken = c.req.header("x-sealos-token");
+
+      let sealosArea: string | undefined;
+
+      if (rawSealosKubeconfig && rawSealosToken) {
+        if (!global.customEnv.SEALOS_APP_TOKEN) {
+          return c.json({ message: "SEALOS_APP_TOKEN not configured" }, 500);
+        }
+
+        let decodedKubeconfig: string;
+        let decodedToken: string;
+
         try {
-          const decoded = decodeURIComponent(rawSealosKubeconfig);
-          if (decoded.trim()) {
-            setUserSealosKubeconfig(userId, decoded);
-          }
+          decodedKubeconfig = decodeURIComponent(rawSealosKubeconfig);
+          decodedToken = decodeURIComponent(rawSealosToken);
         } catch {
           return c.json(
-            { message: "Invalid x-sealos-kubeconfig header" },
+            { message: "Invalid Sealos credential headers" },
             400,
           );
         }
+
+        if (!decodedKubeconfig.trim() || !decodedToken.trim()) {
+          return c.json(
+            { message: "Sealos token and kubeconfig cannot be empty" },
+            400,
+          );
+        }
+
+        let sealosJwtPayload: ReturnType<typeof parseSealosJWT>;
+        try {
+          sealosJwtPayload = parseSealosJWT(
+            decodedToken,
+            global.customEnv.SEALOS_APP_TOKEN,
+          );
+        } catch {
+          return c.json({ message: "Invalid Sealos session token" }, 400);
+        }
+
+        const matchingAreas = Object.entries(areaRegionUuidMap)
+          .filter(([, regionUid]) => regionUid === sealosJwtPayload.regionUid)
+          .map(([area]) => area);
+        const [verifiedArea] = matchingAreas;
+
+        if (!verifiedArea || matchingAreas.length !== 1) {
+          return c.json(
+            { message: "Unsupported or ambiguous Sealos region" },
+            400,
+          );
+        }
+
+        const sealosIdentity =
+          await c.var.db.query.userIdentities.findFirst({
+            where: and(
+              eq(schema.userIdentities.userId, userId),
+              eq(schema.userIdentities.provider, "sealos"),
+              eq(
+                schema.userIdentities.providerUserId,
+                sealosJwtPayload.userId,
+              ),
+            ),
+            columns: { id: true },
+          });
+
+        if (!sealosIdentity) {
+          return c.json(
+            { message: "Sealos session does not belong to current user" },
+            403,
+          );
+        }
+
+        sealosArea = verifiedArea;
+        setUserSealosKubeconfig(userId, sealosArea, decodedKubeconfig);
       }
 
       // Generate WebSocket token
-      const wsToken = generateToken(userId, role);
+      const wsToken = generateToken(userId, role, sealosArea);
       return c.json({
         token: wsToken,
         expiresIn: WS_TOKEN_EXPIRY_TIME / 1000, // Convert to seconds
@@ -778,7 +844,7 @@ const chatRouter = factory
         };
       }
 
-      const { userId, role } = tokenData;
+      const { userId, role, sealosArea } = tokenData;
 
       // Check if user has permission to access this ticket
       const roomMembers = await MyCache.getTicketMembers(ticketId);
@@ -801,18 +867,6 @@ const chatRouter = factory
         return {
           async onOpen(_evt, ws) {
             logInfo(`Client connected: ${clientId}, UserId: ${userId}`);
-
-            if (role === "customer") {
-              const sealosKubeconfig = getUserSealosKubeconfig(userId);
-              if (sealosKubeconfig) {
-                bindTicketSealosKubeconfig(
-                  ticketId,
-                  clientId,
-                  userId,
-                  sealosKubeconfig,
-                );
-              }
-            }
 
             roomEmitter.emit("user_join", {
               clientId,
@@ -882,18 +936,8 @@ const chatRouter = factory
                     return;
                   }
 
-                  if (
-                    role === "customer" &&
-                    parsedMessage.sealosKubeconfig &&
-                    parsedMessage.sealosKubeconfig.trim()
-                  ) {
-                    setUserSealosKubeconfig(userId, parsedMessage.sealosKubeconfig);
-                    bindTicketSealosKubeconfig(
-                      ticketId,
-                      clientId,
-                      userId,
-                      parsedMessage.sealosKubeconfig,
-                    );
+                  if (role === "customer" && sealosArea) {
+                    touchUserSealosKubeconfig(userId, sealosArea);
                   }
 
                   // Save message to database
@@ -1044,10 +1088,6 @@ const chatRouter = factory
             }
           },
           onClose(_evt, ws) {
-            if (role === "customer") {
-              unbindTicketSealosKubeconfig(ticketId, clientId);
-            }
-
             // 如果是 customer 离开首先检查 房间是否有 agent，如果没有 agent 则将 ticket 状态变为 pending，如果有 检查ticket 最近一条消息是否是自己发的，如果是则 pending
             // 如果不是 customer 离开，则检查 ticket 最近一条消息是否是自己发的，如果是自己发的 则状态改为 in progress
             handleUserLeaveStatusUpdate(ticketId, userId, role);
@@ -1063,10 +1103,6 @@ const chatRouter = factory
           },
 
           onError(evt, ws) {
-            if (role === "customer") {
-              unbindTicketSealosKubeconfig(ticketId, clientId);
-            }
-
             logError(
               `Client ${clientId} UserId: ${userId} Error handling WebSocket message:`,
               evt,
