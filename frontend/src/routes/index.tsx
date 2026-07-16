@@ -178,10 +178,7 @@ function AuthGuard() {
         }
 
         // 4. 已认证用户：导航
-        const role = window.localStorage.getItem("role");
-        if (role) {
-          navigateByRole(role);
-        }
+        navigateByRole(authContext.user.role);
       } catch (error) {
         releaseSealosAuthGate();
         console.error("Authentication error:", error);
