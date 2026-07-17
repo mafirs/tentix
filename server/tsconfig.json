@@ -20,7 +20,6 @@
     "emitDeclarationOnly": true,
     "experimentalDecorators": true,
     "noImplicitThis": true,
-    "baseUrl": ".",
     "outDir": "./types",
     "paths": {
       "@db/*": ["./db/*"],
