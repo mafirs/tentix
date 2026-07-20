@@ -143,19 +143,6 @@ const removeApi = (id: string) => {
 
               <Separator className="my-3" />
 
-              <div className="flex items-center justify-between">
-                <Label className="text-sm">是否在 Sealos 上运行</Label>
-                <Switch
-                  className="nodrag"
-                  checked={!!safeData.isSealosRuntime}
-                  onCheckedChange={(v) =>
-                    patchConfig({ isSealosRuntime: v })
-                  }
-                />
-              </div>
-
-              <Separator className="my-3" />
-
               <div className="space-y-2">
                 <Label className="text-sm">Base URL</Label>
                 <Input

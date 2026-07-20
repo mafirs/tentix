@@ -173,7 +173,7 @@ const selectedApiId = toNonEmptyTrimmed((config as any)?.selectedApiId);
 const enableAiSelection = (config as any)?.enableAiSelection === true;
 const aiSystemPromptTpl = (config as any)?.systemPrompt as string | undefined;
 const aiUserPromptTpl = (config as any)?.userPrompt as string | undefined;
-const isSealosRuntime = (config as any)?.isSealosRuntime === true;
+const isSealosRuntime = global.customEnv.TARGET_PLATFORM === "sealos";
 
 
 if (!baseUrl) {
@@ -470,10 +470,10 @@ try {
       if (!sealosKubeconfig) {
         const reason =
           customerId === null
-            ? "config.isSealosRuntime=true but current ticket customer could not be resolved"
+            ? "TARGET_PLATFORM=sealos but current ticket customer could not be resolved"
             : !ticketArea
-              ? "config.isSealosRuntime=true but current ticket area could not be resolved"
-              : "config.isSealosRuntime=true but no sealos kubeconfig is available for current ticket customer and area";
+              ? "TARGET_PLATFORM=sealos but current ticket area could not be resolved"
+              : "TARGET_PLATFORM=sealos but no sealos kubeconfig is available for current ticket customer and area";
         return {
           variables: {
             mcp: {
