@@ -1567,7 +1567,7 @@ function KnowledgeBaseTab() {
           <div>
             <h2 className="text-base font-semibold">知识库</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              管理 AI 回答时可召回的知识内容，保存后自动重建索引
+              管理 AI 客服回答时可召回的业务知识，保存后自动重建索引
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1599,7 +1599,7 @@ function KnowledgeBaseTab() {
                     <FormItem>
                       <FormLabel>标题</FormLabel>
                       <FormControl>
-                        <Input placeholder="公网地址准备中" {...field} />
+                        <Input placeholder="例如：账号登录失败" {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
