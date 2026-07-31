@@ -251,6 +251,7 @@ type KnowledgeListItem = {
   sourceId: string;
   title: string;
   module: string;
+  modules?: string[];
   category: string;
   chunkCount: number;
   disabledChunkCount: number;
@@ -296,6 +297,7 @@ type KnowledgeDetail = {
   sourceId: string;
   title: string;
   module: string;
+  modules?: string[];
   category: string;
   area: string;
   tags: string[];
@@ -1555,6 +1557,10 @@ function KnowledgeBaseTab() {
   const summary = listQuery.data?.summary;
   const isFailureView = Boolean(failedOnly && detail?.syncFailed);
   const isGeneralKnowledgeDetail = detail?.sourceType === "general_knowledge";
+  const detailModuleText =
+    isGeneralKnowledgeDetail && detail.modules?.length
+      ? detail.modules.join("、")
+      : detail?.module || "未分模块";
   const isMutating =
     updateKnowledgeMutation.isPending ||
     updateKnowledgeChunkMutation.isPending ||
@@ -1932,6 +1938,11 @@ function KnowledgeBaseTab() {
             <div className="min-h-0 overflow-auto p-2.5">
               {items.map((item) => {
                 const key = makeKnowledgeKey(item);
+                const moduleText =
+                  item.sourceType === "general_knowledge" &&
+                  item.modules?.length
+                    ? item.modules.join("、")
+                    : item.module || "未分模块";
                 const active = selectedKnowledge
                   ? key === makeKnowledgeKey(selectedKnowledge)
                   : false;
@@ -1978,7 +1989,12 @@ function KnowledgeBaseTab() {
                     {item.title}
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
-                    <span>{item.module || "未分模块"}</span>
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      title={moduleText}
+                    >
+                      {moduleText}
+                    </span>
                     <span className="text-muted-foreground/50">·</span>
                     <span>{item.chunkCount} 片段</span>
                     <span className="text-muted-foreground/50">·</span>
@@ -2068,7 +2084,7 @@ function KnowledgeBaseTab() {
 
                 {isFailureView ? (
                   <div className="grid grid-cols-3 gap-x-6 gap-y-2 border-y border-border py-3">
-                    <KbDetailMeta label="模块" value={detail.module || "未分模块"} />
+                    <KbDetailMeta label="模块" value={detailModuleText} />
                     <KbDetailMeta
                       label="分类"
                       value={detail.category || "未分类"}
@@ -2085,7 +2101,7 @@ function KnowledgeBaseTab() {
                   </div>
                 ) : (
                   <div className="grid grid-cols-4 gap-x-6 gap-y-2 border-y border-border py-3">
-                    <KbDetailMeta label="模块" value={detail.module || "未分模块"} />
+                    <KbDetailMeta label="模块" value={detailModuleText} />
                     <KbDetailMeta
                       label="分类"
                       value={detail.category || "未分类"}

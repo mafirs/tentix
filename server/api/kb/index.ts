@@ -856,6 +856,15 @@ const kbRouter = factory
                 sourceId: schema.knowledgeBase.sourceId,
                 title: sql<string>`COALESCE(MAX(NULLIF(${schema.knowledgeBase.title}, '')), '')`,
                 module: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'module')`,
+                modules: sql<unknown>`(
+                  JSONB_AGG(
+                    ${schema.knowledgeBase.metadata} -> 'modules'
+                    ORDER BY ${schema.knowledgeBase.chunkId}
+                  ) FILTER (
+                    WHERE ${schema.knowledgeBase.sourceType} = 'general_knowledge'
+                      AND JSONB_TYPEOF(${schema.knowledgeBase.metadata} -> 'modules') = 'array'
+                  )
+                ) -> 0`,
                 category: sql<string | null>`MAX(${schema.knowledgeBase.metadata} ->> 'category')`,
                 chunkCount: count(),
                 disabledChunkCount,
@@ -911,6 +920,7 @@ const kbRouter = factory
                 sourceId: row.ticketId,
                 title: row.title ?? row.ticketId,
                 module: row.module ?? "",
+                modules: null,
                 category: row.category ?? "",
                 chunkCount: 0,
                 disabledChunkCount: 0,
@@ -979,11 +989,27 @@ const kbRouter = factory
       return c.json({
         items: pageGroups.map((row) => {
           const favorite = favoriteByTicketId.get(row.sourceId);
+          const storedModules = Array.isArray(row.modules)
+            ? row.modules.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : [];
+          const modules =
+            row.sourceType === "general_knowledge"
+              ? normalizeStringList(
+                  storedModules.length
+                    ? storedModules
+                    : row.module
+                      ? [row.module]
+                      : [],
+                )
+              : undefined;
           return {
             sourceType: row.sourceType,
             sourceId: row.sourceId,
             title: row.title || row.sourceId,
             module: row.module ?? "",
+            modules,
             category: row.category ?? "",
             chunkCount: Number(row.chunkCount || 0),
             disabledChunkCount: Number(row.disabledChunkCount || 0),
@@ -1094,12 +1120,28 @@ const kbRouter = factory
       }
 
       const firstChunk = chunks.find((chunk) => Number(chunk.chunkId) === 0) ?? chunks[0]!;
+      const module = getMetadataString(firstChunk.metadata, "module");
+      const storedModules = getMetadataStringArray(
+        firstChunk.metadata,
+        "modules",
+      );
+      const modules =
+        sourceType === "general_knowledge"
+          ? normalizeStringList(
+              storedModules.length
+                ? storedModules
+                : module
+                  ? [module]
+                  : [],
+            )
+          : undefined;
 
       return c.json({
         sourceType,
         sourceId,
         title: firstChunk.title || sourceId,
-        module: getMetadataString(firstChunk.metadata, "module"),
+        module,
+        modules,
         category: getMetadataString(firstChunk.metadata, "category"),
         area: getMetadataString(firstChunk.metadata, "area"),
         tags: getMetadataStringArray(firstChunk.metadata, "tags"),
