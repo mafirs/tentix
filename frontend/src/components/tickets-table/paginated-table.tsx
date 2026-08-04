@@ -61,6 +61,7 @@ import {
 import useDebounce from "@hook/use-debounce";
 import { userTablePagination } from "@store/table-pagination";
 import { cn } from "@lib/utils";
+import { useSealos } from "src/_provider/sealos";
 
 interface PaginatedTableProps {
   character: "user" | "staff";
@@ -73,6 +74,10 @@ export function PaginatedDataTable({
 }: PaginatedTableProps) {
   const { t, i18n } = useTranslation();
   const router = useRouter();
+  const { isSealos } = useSealos();
+  const isEmbedded =
+    typeof window !== "undefined" && window.self !== window.top;
+  const shouldApplyEmbeddedBottomInset = isSealos || isEmbedded;
   const ticketModules = useTicketModules();
   const searchTicketsPlaceholder =
     i18n.language === "zh"
@@ -1134,7 +1139,12 @@ export function PaginatedDataTable({
   }
 
   return (
-    <div className="h-full flex flex-1 flex-col min-w-0 bg-zinc-50">
+    <div
+      className={cn(
+        "h-full flex flex-1 flex-col min-w-0 bg-zinc-50",
+        shouldApplyEmbeddedBottomInset && "pb-16",
+      )}
+    >
       {/* Header - Fixed */}
       <div className="flex-shrink-0 flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 lg:px-6 py-3 md:h-24 bg-zinc-50">
         <div className="flex w-full md:w-auto gap-2 overflow-x-auto md:flex-wrap md:overflow-visible pb-1 md:pb-0">

@@ -45,6 +45,7 @@ import {
 } from "tentix-ui";
 import useDebounce from "@hook/use-debounce";
 import { allTicketsTablePagination } from "@store/table-pagination";
+import { useSealos } from "src/_provider/sealos";
 
 interface PaginatedTableProps {
   initialData?: GetAllTicketsResponseType;
@@ -53,6 +54,10 @@ interface PaginatedTableProps {
 export function DataTable({ initialData }: PaginatedTableProps) {
   const { t, i18n } = useTranslation();
   const router = useRouter();
+  const { isSealos } = useSealos();
+  const isEmbedded =
+    typeof window !== "undefined" && window.self !== window.top;
+  const shouldApplyEmbeddedBottomInset = isSealos || isEmbedded;
   const ticketModules = useTicketModules();
   const searchTicketsPlaceholder =
     i18n.language === "zh"
@@ -692,7 +697,11 @@ export function DataTable({ initialData }: PaginatedTableProps) {
   }
 
   return (
-    <div className="h-full flex flex-1 flex-col min-w-0 bg-zinc-50">
+    <div
+      className={`h-full flex flex-1 flex-col min-w-0 bg-zinc-50 ${
+        shouldApplyEmbeddedBottomInset ? "pb-16" : ""
+      }`}
+    >
       {/* Header - Fixed */}
       <div className="flex-shrink-0 flex items-center justify-between px-4 lg:px-6 h-24 bg-zinc-50">
         <div className="flex flex-wrap gap-2">
