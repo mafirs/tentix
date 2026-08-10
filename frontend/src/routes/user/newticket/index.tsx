@@ -465,7 +465,7 @@ function RouteComponent() {
               </Button>
               <Button
                 onClick={handleDialogConfirm}
-                className="w-20 h-10 px-4 py-2 bg-black"
+                className="w-full sm:w-20 h-10 px-4 py-2 bg-black"
                 disabled={isLoading}
               >
                 {uploadProgress
