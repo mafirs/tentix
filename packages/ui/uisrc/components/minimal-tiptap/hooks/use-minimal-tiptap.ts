@@ -3,6 +3,7 @@ import {
   useEditor,
   type Editor,
   type Content,
+  type JSONContent,
   type UseEditorOptions,
 } from "@tiptap/react";
 import { Typography } from "@tiptap/extension-typography";
@@ -52,6 +53,35 @@ const fileUploadErrorMapping: Record<FileUploadErrorReason, string> = {
   invalidBase64: "文件不是图片！",
   base64NotAllowed: "文件不是图片！",
 } as const;
+
+const mergePastedContentWithLocalImages = (
+  pastedContent: JSONContent[] | null,
+  imageNodes: JSONContent[],
+) => {
+  let imageIndex = 0;
+
+  const replaceImageNode = (node: JSONContent): JSONContent => {
+    if (node.type === "image") {
+      const imageNode = imageNodes[imageIndex];
+      if (imageNode) {
+        imageIndex += 1;
+        return imageNode;
+      }
+    }
+
+    if (!node.content) {
+      return node;
+    }
+
+    return {
+      ...node,
+      content: node.content.map(replaceImageNode),
+    };
+  };
+
+  const content = (pastedContent ?? []).map(replaceImageNode);
+  return [...content, ...imageNodes.slice(imageIndex)];
+};
 
 const createExtensions = (
   placeholder: string,
@@ -125,14 +155,18 @@ const createExtensions = (
         });
       });
     },
-    onPaste: (editor, files) => {
+    onPaste: (editor, files, pasteSlice) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));
 
-      imageFiles.forEach((file) => {
+      if (imageFiles.length === 0) {
+        return false;
+      }
+
+      const imageNodes = imageFiles.map((file) => {
         const blobUrl = URL.createObjectURL(file);
         const id = randomId();
 
-        editor.commands.insertContent({
+        return {
           type: "image",
           attrs: {
             id,
@@ -143,8 +177,16 @@ const createExtensions = (
             isLocalFile: true,
             originalFile: file,
           },
-        });
+        };
       });
+
+      const pastedContent = mergePastedContentWithLocalImages(
+        pasteSlice.content.toJSON(),
+        imageNodes,
+      );
+
+      editor.commands.insertContent([...pastedContent, { type: "paragraph" }]);
+      return true;
     },
     onValidationError: (errors) => {
       toast({
