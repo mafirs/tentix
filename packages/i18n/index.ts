@@ -284,7 +284,7 @@ export const translations = {
       total: "Total",
       page: "Page",
       no_tickets_found: "No tickets found",
-      no_tickets_found_for_sealos_user: "No tickets found for this Sealos ID",
+      no_tickets_found_for_sealos_user: "No tickets found for this User ID",
       no_tickets_received: "We haven't received any tickets from users yet.",
 
       // Header defaults
@@ -752,7 +752,7 @@ export const translations = {
       // Additional translations for ticket details sidebar
       basic_info: "基本信息",
       user_info: "用户信息",
-      sealos_id: "用户ID",
+      sealos_id: "用户 ID",
       name: "用户名",
       ticket_id: "工单ID",
       assignees: "负责人",
@@ -854,7 +854,7 @@ export const translations = {
       total: "总共",
       page: "页",
       no_tickets_found: "未找到工单",
-      no_tickets_found_for_sealos_user: "未找到该 Sealos 用户的工单",
+      no_tickets_found_for_sealos_user: "未找到该用户 ID 的工单",
       no_tickets_received: "暂未收到任何用户工单。",
 
       // Header defaults

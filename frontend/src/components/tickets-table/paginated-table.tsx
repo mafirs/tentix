@@ -1288,7 +1288,7 @@ export function PaginatedDataTable({
                     className="h-full min-w-[112px] rounded-none border-r border-zinc-200 px-3 text-sm font-normal"
                   >
                     <span>
-                      {displaySearchMode === "ticket" ? t("tkt_one") : "Sealos ID"}
+                      {displaySearchMode === "ticket" ? t("tkt_one") : t("user")}
                     </span>
                     <ChevronDownIcon className="ml-1 h-4 w-4 text-zinc-500" />
                   </Button>
@@ -1298,7 +1298,7 @@ export function PaginatedDataTable({
                     {t("tkt_one")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleSearchModeChange("user")}>
-                    Sealos ID
+                    {t("user")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1307,7 +1307,7 @@ export function PaginatedDataTable({
                 <Input
                   placeholder={
                     displaySearchMode === "user"
-                      ? "Sealos ID"
+                      ? t("sealos_id")
                       : searchTicketsPlaceholder
                   }
                   className="h-full w-full md:w-56 rounded-none border-0 pl-10 pr-3 text-sm leading-none focus-visible:ring-0"

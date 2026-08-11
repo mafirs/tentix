@@ -260,7 +260,7 @@ export function UserManagementSection() {
                               <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm text-zinc-700">
                                 <div className="min-w-0">
                                   <span className="text-zinc-500 mr-2">
-                                    Sealos ID
+                                    用户 ID
                                   </span>
                                   <span className="font-mono break-all">
                                     {user.sealosId || "-"}
