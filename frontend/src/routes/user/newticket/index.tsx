@@ -86,7 +86,7 @@ function TicketForm({
   };
 
   return (
-    <div className="w-230 p-8  bg-white rounded-2xl border border-zinc-200">
+    <div className="my-auto w-full max-w-[920px] min-w-0 shrink-0 p-4 sm:p-8 bg-white rounded-2xl border border-zinc-200">
       <form id="ticket-form" name="ticket-form" onSubmit={handleSubmit}>
         <div className="flex flex-col gap-5 items-center justify-center">
           <div className="flex flex-col gap-1 w-full">
@@ -410,18 +410,18 @@ function RouteComponent() {
     <RouteTransition>
       <div className="flex flex-col h-screen bg-zinc-50">
         {/* Header */}
-        <header className="sticky top-0 z-10 flex h-24 items-center border-b px-10 justify-between bg-white">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between gap-3 border-b bg-white px-4 sm:h-24 sm:px-10">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <ArrowLeftIcon
-              className="h-6 w-6 cursor-pointer"
+              className="h-6 w-6 shrink-0 cursor-pointer"
               onClick={handleBackClick}
             />
-            <p className="text-black text-2xl font-semibold leading-8">
+            <p className="truncate text-black text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">
               {t("create_new_ticket")}
             </p>
           </div>
           <Button
-            className="w-30 items-center justify-center rounded-lg cursor-pointer"
+            className="w-auto shrink-0 items-center justify-center rounded-lg px-4 cursor-pointer sm:w-30"
             onClick={handleSubmitClick}
             type="button"
             disabled={isLoading}
@@ -429,7 +429,7 @@ function RouteComponent() {
             {isLoading ? t("submitting") : t("submit")}
           </Button>
         </header>
-        <div className="@container/main flex flex-1 flex-col justify-center items-center">
+        <div className="@container/main flex min-h-0 flex-1 flex-col items-center overflow-y-auto p-4 sm:p-8">
           {/* Ticket Form */}
           <TicketForm register={register} control={control} errors={errors} />
         </div>
@@ -465,7 +465,7 @@ function RouteComponent() {
               </Button>
               <Button
                 onClick={handleDialogConfirm}
-                className="w-20 h-10 px-4 py-2 bg-black"
+                className="w-full sm:w-20 h-10 px-4 py-2 bg-black"
                 disabled={isLoading}
               >
                 {uploadProgress

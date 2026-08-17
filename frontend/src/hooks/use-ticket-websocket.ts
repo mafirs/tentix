@@ -18,9 +18,14 @@ const WS_CONNECT_TIMEOUT_MS = 8000;
 const WS_TOKEN_EXPIRED_CLOSE_CODE = 4002;
 const WS_TOKEN_EXPIRED_CLOSE_REASON = "Invalid or expired WebSocket token.";
 
+type RefreshedConnectionAuth = {
+  token: string;
+};
+
 interface UseTicketWebSocketProps {
   ticketId: string | null;
   token: string;
+  refreshConnectionAuth?: () => Promise<RefreshedConnectionAuth>;
   userId: number;
   onUserTyping: (userId: number, status: "start" | "stop") => void;
   onError?: (error: any) => void;
@@ -43,6 +48,7 @@ interface UseTicketWebSocketReturn {
 export function useTicketWebSocket({
   ticketId,
   token,
+  refreshConnectionAuth,
   userId,
   onUserTyping,
   onError,
@@ -63,6 +69,10 @@ export function useTicketWebSocket({
   const rejectOpenConnectionRef = useRef<((error: Error) => void) | null>(
     null,
   );
+  const latestTokenRef = useRef(token);
+  const refreshConnectionAuthRef = useRef(refreshConnectionAuth);
+  const refreshConnectionAuthPromiseRef =
+    useRef<Promise<RefreshedConnectionAuth | null> | null>(null);
 
   // 业务相关
   const pendingMessagesRef = useRef<
@@ -88,6 +98,14 @@ export function useTicketWebSocket({
     readMessage,
     setWithdrawMessageFunc,
   } = useChatStore();
+
+  useEffect(() => {
+    latestTokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
+    refreshConnectionAuthRef.current = refreshConnectionAuth;
+  }, [refreshConnectionAuth]);
 
   const clearOpenConnectionWaiter = useCallback(() => {
     if (connectTimeoutRef.current) {
@@ -142,6 +160,30 @@ export function useTicketWebSocket({
 
     return openConnectionPromiseRef.current;
   }, [rejectOpenConnectionWaiter]);
+
+  const refreshConnectionAuthData = useCallback(async () => {
+    const refreshAuth = refreshConnectionAuthRef.current;
+    if (!refreshAuth) {
+      return null;
+    }
+
+    if (!refreshConnectionAuthPromiseRef.current) {
+      refreshConnectionAuthPromiseRef.current = refreshAuth()
+        .then((result) => {
+          latestTokenRef.current = result.token;
+          return result;
+        })
+        .catch((error) => {
+          console.warn("Failed to refresh WebSocket auth data:", error);
+          return null;
+        })
+        .finally(() => {
+          refreshConnectionAuthPromiseRef.current = null;
+        });
+    }
+
+    return refreshConnectionAuthPromiseRef.current;
+  }, []);
 
   const reconcilePendingWithdrawals = useCallback(() => {
     if (withdrawRevalidateTimerRef.current) {
@@ -402,13 +444,16 @@ export function useTicketWebSocket({
         `尝试重连 (${reconnectCountRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})`,
       );
       reconnectCountRef.current++;
-      connectWebSocket();
+      void refreshConnectionAuthData().finally(() => {
+        connectWebSocket();
+      });
     }, WS_RECONNECT_INTERVAL);
-  }, [rejectOpenConnectionWaiter]);
+  }, [refreshConnectionAuthData, rejectOpenConnectionWaiter]);
 
   // ==================== 建立 WebSocket 连接 ====================
   const connectWebSocket = useCallback(() => {
-    if (!token || !ticketId) return;
+    const currentToken = latestTokenRef.current;
+    if (!currentToken || !ticketId) return;
 
     // 先清理旧连接
     cleanup(false);
@@ -420,7 +465,7 @@ export function useTicketWebSocket({
     const wsOrigin = `${protocol}//${window.location.host}`;
     const url = new URL(`/api/chat/ws`, wsOrigin);
     url.searchParams.set("ticketId", ticketId);
-    url.searchParams.set("token", token);
+    url.searchParams.set("token", currentToken);
 
     // 创建新连接
     const ws = new WebSocket(url.toString());
@@ -445,7 +490,9 @@ export function useTicketWebSocket({
         event.code === WS_TOKEN_EXPIRED_CLOSE_CODE ||
         event.reason === WS_TOKEN_EXPIRED_CLOSE_REASON;
       const closeError = new Error(
-        isTokenExpired ? "连接已过期，请刷新页面后重试" : "连接已断开",
+        isTokenExpired && !refreshConnectionAuthRef.current
+          ? "连接已过期，请刷新页面后重试"
+          : "连接已断开",
       );
 
       // 清理待发送消息
@@ -456,7 +503,7 @@ export function useTicketWebSocket({
       pendingMessagesRef.current.clear();
       reconcilePendingWithdrawals();
 
-      if (isTokenExpired) {
+      if (isTokenExpired && !refreshConnectionAuthRef.current) {
         rejectOpenConnectionWaiter(closeError);
         return;
       }
@@ -477,7 +524,11 @@ export function useTicketWebSocket({
       throw new Error("ticketId 未设置");
     }
 
-    if (!token) {
+    if (!latestTokenRef.current) {
+      await refreshConnectionAuthData();
+    }
+
+    if (!latestTokenRef.current) {
       throw new Error("WebSocket token 未设置");
     }
 
@@ -492,11 +543,12 @@ export function useTicketWebSocket({
       ws.readyState === WebSocket.CLOSED
     ) {
       reconnectCountRef.current = 0;
+      await refreshConnectionAuthData();
       connectWebSocket();
     }
 
     return waitForOpenConnection();
-  }, [connectWebSocket, ticketId, token, waitForOpenConnection]);
+  }, [connectWebSocket, refreshConnectionAuthData, ticketId, waitForOpenConnection]);
 
   // ==================== 初始化连接 ====================
   useEffect(() => {
@@ -551,6 +603,13 @@ export function useTicketWebSocket({
           readStatus: [],
           feedbacks: [],
         });
+
+        if (ws.readyState !== WebSocket.OPEN) {
+          pendingMessagesRef.current.delete(tempId);
+          clearTimeout(timeoutId);
+          reject(new Error("连接已断开"));
+          return;
+        }
 
         // 发送到服务器
         ws.send(

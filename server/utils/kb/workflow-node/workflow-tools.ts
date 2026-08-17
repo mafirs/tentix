@@ -1,6 +1,6 @@
 import { SentimentLabel } from "@/utils/const";
 
-import { VectorStore, type SearchHit } from "../types";
+import { VectorStore, type RagTrace, type SearchHit } from "../types";
 import { knowledgeBuilderConfig } from "../const";
 import { OPENAI_CONFIG } from "../config";
 import { getTextWithImageInfo, extractImageUrls } from "../tools";
@@ -81,6 +81,10 @@ export const WorkflowStateAnnotation = Annotation.Root({
     reducer: (_prev, next) => next,
     default: () => [] as Array<SearchHit>,
   }),
+  ragTrace: Annotation<RagTrace | undefined>({
+    reducer: (_prev, next) => next,
+    default: () => undefined,
+  }),
   response: Annotation<string>({
     reducer: (_prev, next) => next,
     default: () => "",
@@ -134,6 +138,7 @@ export function getVariables(state: WorkflowState): {
   proposeEscalation: boolean;
   escalationReason: string;
   retrievedContext: Array<SearchHit>;
+  ragTrace: RagTrace | undefined;
   retrievedContextString: string;
   retrievedContextCount: number;
   ticketDescription: string;
@@ -191,6 +196,7 @@ export function getVariables(state: WorkflowState): {
     proposeEscalation: state.proposeEscalation,
     escalationReason: state.escalationReason,
     retrievedContext: state.retrievedContext,
+    ragTrace: state.ragTrace,
     retrievedContextCount: state.retrievedContext?.length ?? 0,
     retrievedContextString,
     hasRetrievedContext,

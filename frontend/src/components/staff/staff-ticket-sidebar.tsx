@@ -122,6 +122,10 @@ export function StaffTicketSidebar({
     readStatus,
     allTicket,
     searchMode,
+    sortBy,
+    sortOrder,
+    areaFilter,
+    moduleFilter,
     setSearchQuery,
     setSearchMode,
     setStatuses,
@@ -152,6 +156,12 @@ export function StaffTicketSidebar({
       allTicket,
       currentTicketId,
       requestSearchMode,
+      {
+        sortBy,
+        sortOrder,
+        area: areaFilter,
+        module: moduleFilter,
+      },
     ),
   );
 
@@ -283,11 +293,6 @@ export function StaffTicketSidebar({
 
   const tickets = (userTicketsData?.tickets || []) as StaffTicketsListItemType[];
 
-  // Sort tickets by updated time
-  const sortedTickets = [...tickets].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
-
   return (
     <div
       // className={`w-75 h-full border-r bg-white transition-all duration-300 flex-col ${isCollapsed ? "hidden" : "hidden xl:flex"}`}
@@ -364,7 +369,7 @@ export function StaffTicketSidebar({
                 variant="ghost"
                 className="h-full min-w-[112px] rounded-none border-r border-zinc-200 px-3 text-sm font-normal"
               >
-                <span>{searchMode === "ticket" ? t("tkt_one") : "Sealos ID"}</span>
+                <span>{searchMode === "ticket" ? t("tkt_one") : t("user")}</span>
                 <ChevronDownIcon className="ml-1 h-4 w-4 text-zinc-500" />
               </Button>
             </DropdownMenuTrigger>
@@ -373,7 +378,7 @@ export function StaffTicketSidebar({
                 {t("tkt_one")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleSearchModeChange("user")}>
-                Sealos ID
+                {t("user")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -382,7 +387,7 @@ export function StaffTicketSidebar({
             <Input
               placeholder={
                 searchMode === "user"
-                  ? "Sealos ID"
+                  ? t("sealos_id")
                   : searchTicketsPlaceholder
               }
               className="h-full w-full rounded-none border-0 pl-10 pr-3 text-sm leading-none focus-visible:ring-0"
@@ -513,7 +518,7 @@ export function StaffTicketSidebar({
                 {t("loading")}
               </div>
             ) : (
-              sortedTickets.map((ticket) => {
+              tickets.map((ticket) => {
                 const statusDisplay = getStatusDisplay(ticket.status, t);
                 const isUnread = isTicketUnread(ticket);
                 const isSelected = ticket.id === currentTicketId;

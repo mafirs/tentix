@@ -518,7 +518,7 @@ const MyMessage = ({
                 <Badge className="flex items-center justify-center gap-1 rounded border-[0.5px] border-violet-200 bg-violet-100 px-1.5 hover:bg-violet-100">
                   <EyeOffIcon className="h-3 w-3 text-zinc-500" />
                   <span className="text-zinc-900 font-medium text-[12.8px] leading-[140%]">
-                    {"Internal"}
+                    {t("internal")}
                   </span>
                 </Badge>
               </>

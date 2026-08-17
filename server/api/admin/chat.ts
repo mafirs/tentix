@@ -500,7 +500,7 @@ async function aiHandler(
       : undefined;
 
   const result = await getAIResponse(ticket, true, workflowId, runtimeVariables);
-  const JSONContent = textToTipTapJSON(result);
+  const JSONContent = textToTipTapJSON(result.response);
   const messageResult = await saveMessageToDb(ticketId, aiUserId, JSONContent);
 
   sendWSMessage(ws, {

@@ -237,6 +237,8 @@ const ticketRouter = factory
         });
       }
 
+      c.var.incrementTodayTicketCount();
+
       // 发出工单分析事件，异步处理，不阻塞工单创建
       emit(Events.TicketHotIssueAnalysis, {
         ticketId,
@@ -503,6 +505,7 @@ const ticketRouter = factory
             agent: basicUserCols,
             customer: basicUserCols,
             messages: {
+              where: (messages, { eq }) => eq(messages.isInternal, false),
               orderBy: [desc(schema.chatMessages.createdAt)],
               limit: 1,
               with: {

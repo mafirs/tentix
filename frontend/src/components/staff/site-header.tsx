@@ -1,11 +1,15 @@
 import { useTransferModal } from "@modal/use-transfer-modal";
 import { useUpdatePriorityModal } from "@modal/use-update-priority-modal";
 import { useTranslation } from "i18n";
+import { Link } from "@tanstack/react-router";
 import {
+  ArrowLeftIcon,
   PanelLeft,
   TriangleAlertIcon,
   LibraryBigIcon,
   NavigationIcon,
+  EyeIcon,
+  EyeOffIcon,
 } from "lucide-react";
 import { type TicketType } from "tentix-server/rpc";
 import { updateTicketStatus } from "@lib/query";
@@ -27,6 +31,7 @@ import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState, useCallback } from "react";
 import useLocalUser from "@hook/use-local-user.tsx";
 import { useChatStore } from "@store/index";
+import { useInternalMessages } from "@store/internal-messages";
 
 interface SiteHeaderProps {
   ticket: TicketType;
@@ -50,6 +55,7 @@ export function StaffSiteHeader({
   const { role } = useLocalUser();
   const notCustomer = role !== "customer";
   const { kbSelectionMode, setKbSelectionMode, clearKbSelection } = useChatStore();
+  const { showInternal, toggleShowInternal } = useInternalMessages();
 
   // Close ticket mutation
   const closeTicketMutation = useMutation({
@@ -103,8 +109,19 @@ export function StaffSiteHeader({
   };
 
   return (
-    <header className="hidden md:flex h-14 w-full border-b items-center justify-between px-4 ">
-      <div className="flex items-center gap-1">
+    <header className="flex h-14 w-full border-b items-center justify-between gap-2 px-3 md:px-4">
+      <div className="flex min-w-0 items-center gap-1">
+        <Button
+          asChild
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 justify-center items-center rounded-md cursor-pointer flex md:hidden"
+          aria-label={t("go_back")}
+        >
+          <Link to="/staff/tickets/list">
+            <ArrowLeftIcon className="h-5 w-5" />
+          </Link>
+        </Button>
         {toggleSidebar && (
           <Button
             variant="ghost"
@@ -117,16 +134,16 @@ export function StaffSiteHeader({
           </Button>
         )}
         <h1
-          className="max-w-100 2xl:max-w-100 xl:max-w-100 lg:max-w-60 md:max-w-40 sm:max-w-20 truncate block 
-                       text-[#000] 
-                       text-[16px] 
-                       font-[600] 
+          className="max-w-[calc(100vw-72px)] md:max-w-40 lg:max-w-60 xl:max-w-100 2xl:max-w-100 truncate block
+                       text-[#000]
+                       text-[16px]
+                       font-[600]
                        leading-[100%]"
         >
           {ticket.title}
         </h1>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="hidden md:flex items-center gap-3">
         <div className="flex items-center h-10 rounded-lg border border-zinc-200">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -221,6 +238,36 @@ export function StaffSiteHeader({
             {t("transfer")}
           </Button>
         </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              className={
+                showInternal
+                  ? "flex items-center justify-center h-10 w-10 rounded-lg border-violet-200 bg-violet-50 hover:bg-violet-50"
+                  : "flex items-center justify-center h-10 w-10 rounded-lg border-zinc-200 hover:bg-zinc-50"
+              }
+              onClick={toggleShowInternal}
+              aria-label={t("internal_messages")}
+              aria-pressed={showInternal}
+            >
+              {showInternal ? (
+                <EyeIcon
+                  className="h-3 w-3 text-violet-600"
+                  strokeWidth={1.33}
+                />
+              ) : (
+                <EyeOffIcon
+                  className="h-3 w-3 text-zinc-500"
+                  strokeWidth={1.33}
+                />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={2}>
+            <p>{t("internal_messages")}</p>
+          </TooltipContent>
+        </Tooltip>
       </div>
       {transferModal}
       {updatePriorityModal}

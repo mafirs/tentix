@@ -16,10 +16,14 @@ import { usePreloadAvatars } from "@comp/common/cached-avatar.tsx";
 export function UserChat({
   ticket,
   token,
+  refreshConnectionAuth,
   isTicketLoading,
 }: {
   ticket: TicketType;
   token: string;
+  refreshConnectionAuth?: () => Promise<{
+    token: string;
+  }>;
   isTicketLoading: boolean;
 }) {
   const { t } = useTranslation();
@@ -70,6 +74,7 @@ export function UserChat({
   } = useTicketWebSocket({
     ticketId: ticket.id,
     token,
+    refreshConnectionAuth,
     userId,
     onUserTyping: handleUserTyping,
     onError: (error) => console.error("WebSocket error:", error),

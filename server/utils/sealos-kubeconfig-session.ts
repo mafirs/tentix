@@ -5,78 +5,71 @@ type UserSealosKubeconfigBinding = {
   updatedAt: number;
 };
 
-type TicketSealosKubeconfigBinding = {
-  clientId: string;
-  userId: number;
-  kubeconfig: string;
-  updatedAt: number;
-};
-
-const userSealosKubeconfigMap = new Map<number, UserSealosKubeconfigBinding>();
-const ticketSealosKubeconfigMap = new Map<
-  string,
-  TicketSealosKubeconfigBinding
+const userSealosKubeconfigMap = new Map<
+  number,
+  Map<string, UserSealosKubeconfigBinding>
 >();
 
 function isExpired(updatedAt: number) {
   return Date.now() - updatedAt > WS_TOKEN_EXPIRY_TIME;
 }
 
-export function setUserSealosKubeconfig(userId: number, kubeconfig: string) {
-  userSealosKubeconfigMap.set(userId, {
-    kubeconfig,
-    updatedAt: Date.now(),
-  });
-}
-
-export function getUserSealosKubeconfig(userId: number): string | null {
-  const current = userSealosKubeconfigMap.get(userId);
-  if (!current) return null;
-
-  if (isExpired(current.updatedAt)) {
-    userSealosKubeconfigMap.delete(userId);
-    return null;
-  }
-
-  return current.kubeconfig;
-}
-
-export function bindTicketSealosKubeconfig(
-  ticketId: string,
-  clientId: string,
+export function setUserSealosKubeconfig(
   userId: number,
+  area: string,
   kubeconfig: string,
 ) {
-  ticketSealosKubeconfigMap.set(ticketId, {
-    clientId,
-    userId,
+  let areaBindings = userSealosKubeconfigMap.get(userId);
+  if (!areaBindings) {
+    areaBindings = new Map<string, UserSealosKubeconfigBinding>();
+    userSealosKubeconfigMap.set(userId, areaBindings);
+  }
+
+  areaBindings.set(area, {
     kubeconfig,
     updatedAt: Date.now(),
   });
 }
 
-export function getTicketSealosKubeconfig(ticketId: string): string | null {
-  const current = ticketSealosKubeconfigMap.get(ticketId);
+export function getUserSealosKubeconfig(
+  userId: number,
+  area: string,
+): string | null {
+  const areaBindings = userSealosKubeconfigMap.get(userId);
+  if (!areaBindings) return null;
+
+  const current = areaBindings.get(area);
   if (!current) return null;
 
   if (isExpired(current.updatedAt)) {
-    ticketSealosKubeconfigMap.delete(ticketId);
+    areaBindings.delete(area);
+    if (areaBindings.size === 0) {
+      userSealosKubeconfigMap.delete(userId);
+    }
     return null;
   }
 
   return current.kubeconfig;
 }
 
-export function unbindTicketSealosKubeconfig(
-  ticketId: string,
-  clientId?: string,
-) {
-  const current = ticketSealosKubeconfigMap.get(ticketId);
-  if (!current) return;
+export function touchUserSealosKubeconfig(
+  userId: number,
+  area: string,
+): boolean {
+  const areaBindings = userSealosKubeconfigMap.get(userId);
+  if (!areaBindings) return false;
 
-  if (clientId && current.clientId !== clientId) {
-    return;
+  const current = areaBindings.get(area);
+  if (!current) return false;
+
+  if (isExpired(current.updatedAt)) {
+    areaBindings.delete(area);
+    if (areaBindings.size === 0) {
+      userSealosKubeconfigMap.delete(userId);
+    }
+    return false;
   }
 
-  ticketSealosKubeconfigMap.delete(ticketId);
+  current.updatedAt = Date.now();
+  return true;
 }

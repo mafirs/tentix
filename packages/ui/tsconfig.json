@@ -13,7 +13,6 @@
     "composite": true,
     "emitDeclarationOnly": true,
     "noEmit": false,
-    "baseUrl": ".",
     "paths": {
       "@frontend/*": ["../../frontend/src/*"],
       "@server/*": ["../../server/*"],

@@ -5,7 +5,7 @@ import { logError } from "@/utils/log";
 import { tickets } from "@/db/schema";
 import { connectDB } from "@/utils/tools";
 import { eq } from "drizzle-orm";
-import { getTicketSealosKubeconfig } from "@/utils/sealos-kubeconfig-session.ts";
+import { getUserSealosKubeconfig } from "@/utils/sealos-kubeconfig-session.ts";
 import { renderTemplate as renderLiquidTemplate } from "@/utils/template";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
@@ -51,12 +51,14 @@ function getZoneNsFromWorkflowTestSettings(state: WorkflowState): {
 async function getZoneNsByTicketId(ticketId: string): Promise<{
   zone: string | null;
   namespace: string | null;
+  customerId: number | null;
 }> {
   const db = connectDB();
   const [row] = await db
     .select({
       zone: tickets.area,
       namespace: tickets.sealosNamespace,
+      customerId: tickets.customerId,
     })
     .from(tickets)
     .where(eq(tickets.id, ticketId))
@@ -65,6 +67,7 @@ async function getZoneNsByTicketId(ticketId: string): Promise<{
   return {
     zone: toNonEmptyTrimmed(row?.zone),
     namespace: toNonEmptyTrimmed(row?.namespace),
+    customerId: row?.customerId ?? null,
   };
 }
 
@@ -132,12 +135,14 @@ export async function mcpNode(
     let zone: string | null = injected.zone;
     let namespace: string | null = injected.namespace;
     let source: "workflow_test_settings" | "tickets" = "workflow_test_settings";
+    let ticketContext: Awaited<ReturnType<typeof getZoneNsByTicketId>> | null =
+      null;
 
     // 没有注入时，走原逻辑：从 tickets 表取
     if (!zone || !namespace) {
-      const fromTicket = await getZoneNsByTicketId(ticketId);
-      zone = fromTicket.zone;
-      namespace = fromTicket.namespace;
+      ticketContext = await getZoneNsByTicketId(ticketId);
+      zone = ticketContext.zone;
+      namespace = ticketContext.namespace;
       source = "tickets";
     }
 
@@ -168,7 +173,7 @@ const selectedApiId = toNonEmptyTrimmed((config as any)?.selectedApiId);
 const enableAiSelection = (config as any)?.enableAiSelection === true;
 const aiSystemPromptTpl = (config as any)?.systemPrompt as string | undefined;
 const aiUserPromptTpl = (config as any)?.userPrompt as string | undefined;
-const isSealosRuntime = (config as any)?.isSealosRuntime === true;
+const isSealosRuntime = global.customEnv.TARGET_PLATFORM === "sealos";
 
 
 if (!baseUrl) {
@@ -437,6 +442,12 @@ try {
       historyMessages: variables.historyMessages,
       latestMessage: variables.lastCustomerMessage,
       latestMessageImages,
+      retrievedKnowledge: {
+        count: variables.retrievedContextCount,
+        text: variables.retrievedContextString,
+        items: variables.retrievedContext,
+        trace: variables.ragTrace,
+      },
     };
 
     const headers: Record<string, string> = {
@@ -449,9 +460,20 @@ try {
     }
 
     if (isSealosRuntime) {
-      const sealosKubeconfig = getTicketSealosKubeconfig(ticketId);
+      ticketContext ??= await getZoneNsByTicketId(ticketId);
+      const { customerId, zone: ticketArea } = ticketContext;
+      const sealosKubeconfig =
+        customerId === null || !ticketArea
+          ? null
+          : getUserSealosKubeconfig(customerId, ticketArea);
 
       if (!sealosKubeconfig) {
+        const reason =
+          customerId === null
+            ? "TARGET_PLATFORM=sealos but current ticket customer could not be resolved"
+            : !ticketArea
+              ? "TARGET_PLATFORM=sealos but current ticket area could not be resolved"
+              : "TARGET_PLATFORM=sealos but no sealos kubeconfig is available for current ticket customer and area";
         return {
           variables: {
             mcp: {
@@ -464,8 +486,7 @@ try {
               apiId: api.id,
               apiMethod: method,
               sealosRuntime: true,
-              reason:
-                "config.isSealosRuntime=true but no sealos kubeconfig is bound to current ticket session",
+              reason,
               result: null,
               updatedAt: now,
             },

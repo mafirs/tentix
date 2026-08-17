@@ -1,4 +1,5 @@
 import { Plugin, PluginKey } from "@tiptap/pm/state";
+import type { Slice } from "@tiptap/pm/model";
 import { type Editor, Extension } from "@tiptap/react";
 import {
   filterFiles,
@@ -9,7 +10,7 @@ import {
 type FileHandlePluginOptions = {
   key?: PluginKey;
   editor: Editor;
-  onPaste?: (editor: Editor, files: File[], pasteContent?: string) => void;
+  onPaste?: (editor: Editor, files: File[], pasteSlice: Slice) => boolean | void;
   onDrop?: (editor: Editor, files: File[], pos: number) => void;
   onValidationError?: (errors: FileError[]) => void;
 } & FileValidationOptions;
@@ -62,14 +63,11 @@ const FileHandlePlugin = (options: FileHandlePluginOptions) => {
         }
       },
 
-      handlePaste(_, event) {
-        event.preventDefault();
-        event.stopPropagation();
-
+      handlePaste(_, event, slice) {
         const { clipboardData } = event;
 
         if (!clipboardData?.files.length) {
-          return;
+          return false;
         }
 
         const [validFiles, errors] = filterFiles(
@@ -80,15 +78,21 @@ const FileHandlePlugin = (options: FileHandlePluginOptions) => {
             allowBase64: options.allowBase64,
           },
         );
-        const html = clipboardData.getData("text/html");
-
         if (errors.length > 0 && onValidationError) {
           onValidationError(errors);
         }
 
         if (validFiles.length > 0 && onPaste) {
-          onPaste(editor, validFiles, html);
+          const handled = onPaste(editor, validFiles, slice);
+
+          if (handled) {
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
         }
+
+        return false;
       },
     },
   });

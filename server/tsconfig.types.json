@@ -4,7 +4,6 @@
     "emitDeclarationOnly": true,
     "declarationMap": false,
     "outDir": "./output",
-    "baseUrl": ".",
   },
   "include": ["./**/*.ts"],
   "files": ["./utils/rpc.ts"],

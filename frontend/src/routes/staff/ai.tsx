@@ -36,6 +36,7 @@ import {
   ItemTitle,
   ItemDescription,
   Badge,
+  Checkbox,
   Select,
   SelectContent,
   SelectItem,
@@ -60,7 +61,7 @@ import {
   useQueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { apiClient, kbAdminSaveFetch } from "@lib/api-client";
+import { apiClient, kbAdminSaveFetch, kbIndexGenerateFetch } from "@lib/api-client";
 import {
   Search,
   Plus,
@@ -101,6 +102,106 @@ const createWorkflowFormSchema = z.object({
 });
 
 type CreateWorkflowFormData = z.infer<typeof createWorkflowFormSchema>;
+
+const GENERAL_KNOWLEDGE_CATEGORY_VALUES = [
+  "troubleshooting",
+  "feature",
+  "billing",
+  "operation",
+  "other",
+] as const;
+
+const GENERAL_KNOWLEDGE_CATEGORY_LABELS: Record<
+  (typeof GENERAL_KNOWLEDGE_CATEGORY_VALUES)[number],
+  string
+> = {
+  troubleshooting: "故障排查",
+  feature: "功能说明",
+  billing: "费用计费",
+  operation: "运营规则",
+  other: "其他",
+};
+
+const MANUAL_GENERAL_KNOWLEDGE_SOURCE_DOC_ID = "manual";
+const MANUAL_GENERAL_KNOWLEDGE_DOC_NAME = "手动添加";
+
+const generalKnowledgeSourcePartSchema = z
+  .string()
+  .trim()
+  .min(1, "不能为空")
+  .max(80, "不能超过 80 个字符")
+  .regex(/^[A-Za-z0-9_-]+$/, "仅支持字母、数字、下划线和短横线");
+
+function getManualGeneralKnowledgeRevision(): string {
+  return `manual-${new Date().toISOString().slice(0, 10)}`;
+}
+
+function createManualGeneralKnowledgeEntrySlug(): string {
+  const randomPart =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 10);
+
+  return `manual-${Date.now().toString(36)}-${randomPart}`
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .slice(0, 80);
+}
+
+const createGeneralKnowledgeFormSchema = z.object({
+  entrySlug: generalKnowledgeSourcePartSchema,
+  title: z.string().trim().min(1, "标题不能为空").max(200),
+  modules: z
+    .array(z.string().trim().min(1))
+    .min(1, "至少选择一个模块")
+    .max(10, "模块数量不能超过 10 个"),
+  category: z.enum(GENERAL_KNOWLEDGE_CATEGORY_VALUES),
+  content: z.string().trim().min(1, "正文不能为空").max(20000),
+  index1: z.string().trim().max(500, "召回索引不能超过 500 个字符").optional(),
+  index2: z.string().trim().max(500, "召回索引不能超过 500 个字符").optional(),
+  index3: z.string().trim().max(500, "召回索引不能超过 500 个字符").optional(),
+});
+
+type CreateGeneralKnowledgeFormData = z.infer<
+  typeof createGeneralKnowledgeFormSchema
+>;
+
+type GeneralKnowledgeCategory =
+  (typeof GENERAL_KNOWLEDGE_CATEGORY_VALUES)[number];
+
+type GeneralKnowledgeCreatePayload = {
+  sourceId: string;
+  title: string;
+  modules: string[];
+  category: GeneralKnowledgeCategory;
+  docName?: string;
+  revision: string;
+  content: string;
+  indexes?: string[];
+};
+
+type GeneralKnowledgeIndexesResponse = {
+  success: boolean;
+  data: { indexes: string[] };
+};
+
+function getDefaultGeneralKnowledgeFormValues(): CreateGeneralKnowledgeFormData {
+  return {
+    entrySlug: createManualGeneralKnowledgeEntrySlug(),
+    title: "",
+    modules: [],
+    category: "troubleshooting",
+    content: "",
+    index1: "",
+    index2: "",
+    index3: "",
+  };
+}
+
+function buildGeneralKnowledgeSourceId(
+  values: Pick<CreateGeneralKnowledgeFormData, "entrySlug">,
+): string {
+  return `general_knowledge:${MANUAL_GENERAL_KNOWLEDGE_SOURCE_DOC_ID}:${values.entrySlug.trim()}`;
+}
 
 const aiRoleConfigsQueryOptions = (keyword?: string) => {
   const normalized = (keyword ?? "").trim();
@@ -150,6 +251,7 @@ type KnowledgeListItem = {
   sourceId: string;
   title: string;
   module: string;
+  modules?: string[];
   category: string;
   chunkCount: number;
   disabledChunkCount: number;
@@ -195,6 +297,7 @@ type KnowledgeDetail = {
   sourceId: string;
   title: string;
   module: string;
+  modules?: string[];
   category: string;
   area: string;
   tags: string[];
@@ -283,6 +386,71 @@ const knowledgeDetailQueryOptions = (
       return (await res.json()) as KnowledgeDetail;
     },
   });
+
+async function createGeneralKnowledgePayload(
+  data: GeneralKnowledgeCreatePayload,
+): Promise<{ success: boolean; data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number } }> {
+  const res = await apiClient.kb.admin["general-knowledge"].$post({
+    json: {
+      sourceId: data.sourceId,
+      title: data.title.trim(),
+      modules: data.modules,
+      category: data.category,
+      docName: data.docName?.trim() || undefined,
+      revision: data.revision.trim(),
+      content: data.content.trim(),
+      indexes: data.indexes?.length ? data.indexes : undefined,
+    },
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(getErrorMessage(errorData, "添加通用知识失败"));
+  }
+  return (await res.json()) as {
+    success: boolean;
+    data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number };
+  };
+}
+
+async function generateGeneralKnowledgeIndexes(
+  data: CreateGeneralKnowledgeFormData,
+): Promise<string[]> {
+  const res = await apiClient.kb.admin["general-knowledge"].indexes.generate.$post(
+    {
+      json: {
+        title: data.title.trim(),
+        modules: data.modules,
+        category: data.category,
+        content: data.content.trim(),
+      },
+    },
+    { fetch: kbIndexGenerateFetch },
+  );
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(getErrorMessage(errorData, "召回索引生成失败"));
+  }
+  const body = (await res.json()) as GeneralKnowledgeIndexesResponse;
+  return body.data.indexes;
+}
+
+async function createGeneralKnowledge(
+  data: CreateGeneralKnowledgeFormData,
+): Promise<{ success: boolean; data: { sourceType: "general_knowledge"; sourceId: string; chunkCount: number } }> {
+  const indexes = [data.index1, data.index2, data.index3]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return createGeneralKnowledgePayload({
+    sourceId: buildGeneralKnowledgeSourceId(data),
+    title: data.title,
+    modules: data.modules,
+    category: data.category,
+    docName: MANUAL_GENERAL_KNOWLEDGE_DOC_NAME,
+    revision: getManualGeneralKnowledgeRevision(),
+    content: data.content,
+    indexes,
+  });
+}
 
 // 为列表图标提供一组可选的 Tailwind 色系（文本+浅色背景）
 const TAILWIND_COLOR_COMBOS: string[] = [
@@ -1032,6 +1200,21 @@ function KnowledgeBaseTab() {
   const pageSize = 50;
   const [selectedKnowledge, setSelectedKnowledge] = useState<Pick<KnowledgeListItem, "sourceType" | "sourceId"> | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [autoGenerateIndexes, setAutoGenerateIndexes] = useState(false);
+  const ticketModules = useTicketModules();
+  const createKnowledgeForm = useForm<CreateGeneralKnowledgeFormData>({
+    resolver: zodResolver(createGeneralKnowledgeFormSchema),
+    defaultValues: getDefaultGeneralKnowledgeFormValues(),
+  });
+  const moduleOptions = useMemo(
+    () =>
+      ticketModules.map((item) => ({
+        code: item.code,
+        label: item.translations?.["zh-CN"] || item.code,
+      })),
+    [ticketModules],
+  );
   const resetListPage = useCallback(() => {
     setPage(1);
   }, []);
@@ -1183,8 +1366,107 @@ function KnowledgeBaseTab() {
     },
   });
 
+  const createGeneralKnowledgeMutation = useMutation({
+    mutationFn: createGeneralKnowledge,
+    onSuccess: (_result, values) => {
+      const sourceId = buildGeneralKnowledgeSourceId(values);
+      setCreateDialogOpen(false);
+      createKnowledgeForm.reset(getDefaultGeneralKnowledgeFormValues());
+      setSourceType("general_knowledge");
+      setModule("all");
+      setStatus("all");
+      setFailedOnly(false);
+      setKeyword("");
+      setPage(1);
+      setSelectedKnowledge({
+        sourceType: "general_knowledge",
+        sourceId,
+      });
+      queryClient.invalidateQueries({ queryKey: ["admin-knowledge-base"] });
+      queryClient.invalidateQueries({
+        queryKey: [
+          "admin-knowledge-base-detail",
+          "general_knowledge",
+          sourceId,
+        ],
+      });
+      toast({ title: "通用知识已添加" });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "添加通用知识失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const generateGeneralKnowledgeIndexesMutation = useMutation({
+    mutationFn: generateGeneralKnowledgeIndexes,
+    onSuccess: (indexes) => {
+      if (indexes.length === 0) {
+        toast({ title: "未生成有效召回索引" });
+        return;
+      }
+      const fields = ["index1", "index2", "index3"] as const;
+      let nextIndex = 0;
+      let filledCount = 0;
+      for (const field of fields) {
+        if (nextIndex >= indexes.length) break;
+        const current = createKnowledgeForm.getValues(field)?.trim();
+        if (current) continue;
+        createKnowledgeForm.setValue(field, indexes[nextIndex]!, {
+          shouldDirty: true,
+          shouldValidate: true,
+        });
+        nextIndex += 1;
+        filledCount += 1;
+      }
+      if (filledCount === 0) {
+        toast({ title: "召回索引已存在，未覆盖" });
+        return;
+      }
+      toast({ title: "召回索引已生成" });
+    },
+    onError: (error) => {
+      toast({
+        title: getErrorMessage(error, "召回索引生成失败"),
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRefresh = () => {
     invalidateKnowledgeQueries();
+  };
+
+  const handleCreateDialogOpenChange = (open: boolean) => {
+    setCreateDialogOpen(open);
+    if (!open) {
+      createKnowledgeForm.reset(getDefaultGeneralKnowledgeFormValues());
+      setAutoGenerateIndexes(false);
+      generateGeneralKnowledgeIndexesMutation.reset();
+    }
+  };
+
+  const handleCreateGeneralKnowledge = (values: CreateGeneralKnowledgeFormData) => {
+    createGeneralKnowledgeMutation.mutate(values);
+  };
+
+  const handleGenerateGeneralKnowledgeIndexes = async () => {
+    const valid = await createKnowledgeForm.trigger([
+      "title",
+      "modules",
+      "category",
+      "content",
+    ]);
+    if (!valid) {
+      toast({
+        title: "请先填写标题、适用模块、分类和正文",
+        variant: "destructive",
+      });
+      return;
+    }
+    generateGeneralKnowledgeIndexesMutation.mutate(createKnowledgeForm.getValues());
   };
 
   const handleSave = () => {
@@ -1193,6 +1475,48 @@ function KnowledgeBaseTab() {
       const original = detail.chunks.find((item) => item.id === chunk.id);
       return original && original.content !== chunk.content;
     });
+
+    if (detail.sourceType === "general_knowledge") {
+      const changedIndexChunks = changedChunks.filter((chunk) => chunk.chunkId > 0);
+      const hasContentChunkChange = changedChunks.some((chunk) => chunk.chunkId === 0);
+      if (hasContentChunkChange) {
+        toast({
+          title: "通用知识正文暂不支持在此保存",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (changedIndexChunks.length === 0) {
+        toast({ title: "没有需要保存的召回索引改动" });
+        return;
+      }
+      const invalidIndexChunk = changedIndexChunks.find((chunk) => {
+        const content = chunk.content.trim();
+        return content.length === 0 || content.length > 500;
+      });
+      if (invalidIndexChunk) {
+        toast({
+          title: "召回索引不能为空且不能超过 500 个字符",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      updateKnowledgeMutation.mutate(
+        {
+          sourceType: detail.sourceType,
+          sourceId: detail.sourceId,
+          data: {
+            chunks: changedIndexChunks.map((chunk) => ({
+              id: chunk.id,
+              content: chunk.content,
+            })),
+          },
+        },
+        { onSuccess: () => toast({ title: "召回索引已保存并重建" }) },
+      );
+      return;
+    }
     if (changedChunks.length === 0) {
       toast({ title: "没有需要保存的改动" });
       return;
@@ -1232,6 +1556,11 @@ function KnowledgeBaseTab() {
 
   const summary = listQuery.data?.summary;
   const isFailureView = Boolean(failedOnly && detail?.syncFailed);
+  const isGeneralKnowledgeDetail = detail?.sourceType === "general_knowledge";
+  const detailModuleText =
+    isGeneralKnowledgeDetail && detail.modules?.length
+      ? detail.modules.join("、")
+      : detail?.module || "未分模块";
   const isMutating =
     updateKnowledgeMutation.isPending ||
     updateKnowledgeChunkMutation.isPending ||
@@ -1244,14 +1573,200 @@ function KnowledgeBaseTab() {
           <div>
             <h2 className="text-base font-semibold">知识库</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              管理 AI 回答时可召回的知识内容，保存后自动重建索引
+              管理 AI 客服回答时可召回的业务知识，保存后自动重建索引
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              添加通用知识
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              刷新
+            </Button>
+          </div>
         </div>
+
+        <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
+          <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>添加通用知识</DialogTitle>
+            </DialogHeader>
+            <Form {...createKnowledgeForm}>
+              <form
+                className="space-y-5"
+                onSubmit={createKnowledgeForm.handleSubmit(handleCreateGeneralKnowledge)}
+              >
+                <FormField
+                  control={createKnowledgeForm.control}
+                  name="title"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>标题</FormLabel>
+                      <FormControl>
+                        <Input placeholder="例如：账号登录失败" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={createKnowledgeForm.control}
+                  name="modules"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>适用模块</FormLabel>
+                      <div className="grid max-h-40 gap-2 overflow-auto rounded-md border border-border p-3 sm:grid-cols-2">
+                        {moduleOptions.length ? (
+                          moduleOptions.map((item) => {
+                            const checked = (field.value ?? []).includes(item.code);
+                            return (
+                              <label
+                                key={item.code}
+                                className="flex items-center gap-2 text-sm"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(value) => {
+                                    const nextChecked = value === true;
+                                    const current = field.value ?? [];
+                                    field.onChange(
+                                      nextChecked
+                                        ? Array.from(new Set([...current, item.code]))
+                                        : current.filter((module) => module !== item.code),
+                                    );
+                                  }}
+                                />
+                                <span>{item.label}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {item.code}
+                                </span>
+                              </label>
+                            );
+                          })
+                        ) : (
+                          <div className="text-sm text-muted-foreground">
+                            暂无可选模块
+                          </div>
+                        )}
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={createKnowledgeForm.control}
+                  name="category"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>分类</FormLabel>
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择分类" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {GENERAL_KNOWLEDGE_CATEGORY_LABELS[value]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={createKnowledgeForm.control}
+                  name="content"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>正式知识正文</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="填写会返回给 AI 的正式知识内容"
+                          className="min-h-[180px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="grid gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={autoGenerateIndexes}
+                        disabled={
+                          createGeneralKnowledgeMutation.isPending ||
+                          generateGeneralKnowledgeIndexesMutation.isPending
+                        }
+                        onCheckedChange={(value) =>
+                          setAutoGenerateIndexes(value === true)
+                        }
+                      />
+                      <span>召回索引自动生成</span>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={
+                        !autoGenerateIndexes ||
+                        createGeneralKnowledgeMutation.isPending ||
+                        generateGeneralKnowledgeIndexesMutation.isPending
+                      }
+                      onClick={handleGenerateGeneralKnowledgeIndexes}
+                    >
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      {generateGeneralKnowledgeIndexesMutation.isPending
+                        ? "生成中"
+                        : "生成"}
+                    </Button>
+                  </div>
+                  {(["index1", "index2", "index3"] as const).map((name, index) => (
+                    <FormField
+                      key={name}
+                      control={createKnowledgeForm.control}
+                      name={name}
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>召回索引 {index + 1}</FormLabel>
+                          <FormControl>
+                            <Input placeholder="用户可能的问法，可留空" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleCreateDialogOpenChange(false)}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={
+                      createGeneralKnowledgeMutation.isPending ||
+                      generateGeneralKnowledgeIndexesMutation.isPending
+                    }
+                  >
+                    {createGeneralKnowledgeMutation.isPending ? "添加中" : "添加"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
 
         <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
           <div className="grid grid-cols-4 divide-x divide-border">
@@ -1423,6 +1938,11 @@ function KnowledgeBaseTab() {
             <div className="min-h-0 overflow-auto p-2.5">
               {items.map((item) => {
                 const key = makeKnowledgeKey(item);
+                const moduleText =
+                  item.sourceType === "general_knowledge" &&
+                  item.modules?.length
+                    ? item.modules.join("、")
+                    : item.module || "未分模块";
                 const active = selectedKnowledge
                   ? key === makeKnowledgeKey(selectedKnowledge)
                   : false;
@@ -1469,7 +1989,12 @@ function KnowledgeBaseTab() {
                     {item.title}
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
-                    <span>{item.module || "未分模块"}</span>
+                    <span
+                      className="min-w-0 flex-1 truncate"
+                      title={moduleText}
+                    >
+                      {moduleText}
+                    </span>
                     <span className="text-muted-foreground/50">·</span>
                     <span>{item.chunkCount} 片段</span>
                     <span className="text-muted-foreground/50">·</span>
@@ -1559,7 +2084,7 @@ function KnowledgeBaseTab() {
 
                 {isFailureView ? (
                   <div className="grid grid-cols-3 gap-x-6 gap-y-2 border-y border-border py-3">
-                    <KbDetailMeta label="模块" value={detail.module || "未分模块"} />
+                    <KbDetailMeta label="模块" value={detailModuleText} />
                     <KbDetailMeta
                       label="分类"
                       value={detail.category || "未分类"}
@@ -1576,7 +2101,7 @@ function KnowledgeBaseTab() {
                   </div>
                 ) : (
                   <div className="grid grid-cols-4 gap-x-6 gap-y-2 border-y border-border py-3">
-                    <KbDetailMeta label="模块" value={detail.module || "未分模块"} />
+                    <KbDetailMeta label="模块" value={detailModuleText} />
                     <KbDetailMeta
                       label="分类"
                       value={detail.category || "未分类"}
@@ -1607,14 +2132,23 @@ function KnowledgeBaseTab() {
                     <div className="mb-3 flex items-center justify-between">
                       <div className="text-sm font-medium">内容片段</div>
                       <div className="text-xs text-muted-foreground">
-                        未点击保存前不会写入数据库
+                        {isGeneralKnowledgeDetail
+                          ? "仅召回索引可编辑，正式知识正文保持只读"
+                          : "未点击保存前不会写入数据库"}
                       </div>
                     </div>
                     <div className="space-y-4">
                       {draftChunks.map((chunk, index) => (
                         <div key={chunk.id} className="space-y-2">
                           <div className="flex items-center gap-2">
-                            {chunk.chunkId === 0 ? (
+                            {detail.sourceType === "general_knowledge" ? (
+                              <Badge
+                                variant="outline"
+                                className="border-emerald-500/30 bg-emerald-50 text-emerald-700"
+                              >
+                                {chunk.chunkId === 0 ? "正式知识" : "召回索引"}
+                              </Badge>
+                            ) : chunk.chunkId === 0 ? (
                               <Badge
                                 variant="outline"
                                 className="gap-1 border-orange-500/30 bg-orange-50 text-orange-700"
@@ -1635,19 +2169,25 @@ function KnowledgeBaseTab() {
                                 已禁用
                               </Badge>
                             ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="ml-auto h-7"
-                              onClick={() => handleToggleChunkDisabled(chunk)}
-                              disabled={isMutating}
-                            >
-                              {chunk.isDeleted ? "解除禁用" : "禁用"}
-                            </Button>
+                            {isGeneralKnowledgeDetail ? (
+                              <div className="ml-auto" />
+                            ) : (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="ml-auto h-7"
+                                onClick={() => handleToggleChunkDisabled(chunk)}
+                                disabled={isMutating}
+                              >
+                                {chunk.isDeleted ? "解除禁用" : "禁用"}
+                              </Button>
+                            )}
                           </div>
                           <Textarea
                             value={chunk.content}
+                            readOnly={isGeneralKnowledgeDetail && chunk.chunkId === 0}
+                            maxLength={isGeneralKnowledgeDetail && chunk.chunkId > 0 ? 500 : undefined}
                             onChange={(e) =>
                               setDraftChunks((prev) =>
                                 prev.map((item) =>
@@ -1660,6 +2200,7 @@ function KnowledgeBaseTab() {
                             className={cn(
                               "min-h-[130px] resize-y text-sm leading-6",
                               chunk.isDeleted && "border-destructive/30 bg-destructive/5",
+                              isGeneralKnowledgeDetail && chunk.chunkId === 0 && "bg-muted/40",
                             )}
                           />
                         </div>
@@ -1669,7 +2210,7 @@ function KnowledgeBaseTab() {
                 )}
 
                 <div className="flex items-center gap-2">
-                  {isFailureView ? null : (
+                  {isFailureView || (isGeneralKnowledgeDetail && !draftChunks.some((chunk) => chunk.chunkId > 0)) ? null : (
                     <Button onClick={handleSave} disabled={isMutating} className="shadow-sm">
                       <Save className="mr-2 h-4 w-4" />
                       保存并重建索引

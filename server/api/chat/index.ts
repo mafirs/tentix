@@ -1,17 +1,20 @@
 /* eslint-disable drizzle/enforce-delete-with-where */
 import * as schema from "@/db/schema.ts";
 import { MyCache } from "@/utils/cache.ts";
-import { WS_TOKEN_EXPIRY_TIME } from "@/utils/const.ts";
+import { areaRegionUuidMap, WS_TOKEN_EXPIRY_TIME } from "@/utils/const.ts";
 import {
   connectDB,
   logError,
   logInfo,
+  plainTextToTipTapJSON,
   textToTipTapJSON,
   saveMessageReadStatus,
   saveMessageToDb,
   withdrawMessage,
 } from "@/utils/index.ts";
 import { getAIResponse, workflowCache } from "@/utils/kb/workflow-cache.ts";
+import { parseSealosJWT } from "@/utils/jwt.ts";
+import type { RagTrace, RagTraceHit } from "@/utils/kb/types.ts";
 import { runWithInterval } from "@/utils/runtime.ts";
 import { upgradeWebSocket, WS_CLOSE_CODE } from "@/utils/websocket.ts";
 import {
@@ -34,10 +37,8 @@ import { streamSSE } from "hono/streaming";
 import NodeCache from "node-cache";
 import { z } from "zod";
 import {
-  bindTicketSealosKubeconfig,
-  getUserSealosKubeconfig,
   setUserSealosKubeconfig,
-  unbindTicketSealosKubeconfig,
+  touchUserSealosKubeconfig,
 } from "@/utils/sealos-kubeconfig-session.ts";
 import { authMiddleware, factory } from "../middleware.ts";
 import { sendUnreadSSE, sendWsMessage, wsInstance } from "./tools.ts";
@@ -61,15 +62,21 @@ interface TokenData {
   userId: number;
   role: userRoleType;
   expiresAt: number;
+  sealosArea?: string;
 }
 
 const tokenMap = new Map<string, TokenData>();
 
-const generateToken = (userId: number, role: userRoleType): string => {
+const generateToken = (
+  userId: number,
+  role: userRoleType,
+  sealosArea?: string,
+): string => {
   const token = crypto.randomUUID();
   tokenMap.set(token, {
     userId,
     role,
+    ...(sealosArea ? { sealosArea } : {}),
     expiresAt: Date.now() + WS_TOKEN_EXPIRY_TIME,
   });
   return token;
@@ -266,6 +273,7 @@ namespace aiHandler {
           and(
             eq(schema.chatMessages.ticketId, ticketId),
             eq(schema.users.role, "ai"),
+            eq(schema.chatMessages.isInternal, false),
           ),
         );
       currentCount = num?.count ?? 0;
@@ -290,130 +298,146 @@ namespace aiHandler {
       logInfo(`AI already responding for ticket ${ticketId}, skip trigger.`);
       return;
     }
-
-    // ai 不响应 closed 状态的工单 和 已经转人工的工单
-    const ticket = await db.query.tickets.findFirst({
-      where: (t, { eq }) => eq(t.id, ticketId),
-      columns: {
-        id: true,
-        title: true,
-        description: true,
-        module: true,
-        category: true,
-        status: true,
-      },
-    });
-
-    if (!ticket || ticket.status === "resolved") {
-      logInfo(`Ticket ${ticketId} is closed or not found, skip AI response.`);
-      return;
-    }
-
-    const handoffRecord = await db.query.handoffRecords.findFirst({
-      where: (h, { eq }) => eq(h.ticketId, ticketId),
-      columns: {
-        id: true,
-        notificationSent: true,
-        handoffReason: false,
-        priority: false,
-        sentiment: false,
-      },
-    });
-
-    if (handoffRecord?.notificationSent) {
-      logInfo(`Ticket ${ticketId} has already been handoff, skip AI response.`);
-      return;
-    }
-
     aiProcessingSet.add(ticketId);
-
-    // Baseline count to ensure consistent increment
-    const beforeCount = aiResponseCountCache.get<number>(ticketId) ?? 0;
-
-    const aiUserId =
-      workflowCache.getAiUserId(ticket.module) ??
-      workflowCache.getFallbackAiUserId();
-
-    if (!aiUserId) {
-      aiProcessingSet.delete(ticketId);
-      sendWsMessage(ws, {
-        type: "error",
-        error: "Tentix Ai is not configured.",
-      });
-      return;
-    }
-
-    // Set timeout to auto-clear lock to avoid deadlocks
     const timeoutId = setTimeout(() => {
-      aiProcessingSet.delete(ticketId);
-      aiProcessingTimeouts.delete(ticketId);
+      clearAIInFlight(ticketId);
       logError(`AI processing timeout for ticket ${ticketId}`);
     }, AI_PROCESSING_TIMEOUT);
-
     aiProcessingTimeouts.set(ticketId, timeoutId);
 
-    runWithInterval(
-      () => getAIResponse(ticket),
-      () =>
-        broadcastToRoom(ticketId, {
-          type: "user_typing",
-          userId: aiUserId,
-          roomId: ticketId,
-          timestamp: Date.now(),
-        }),
-      2000,
-      async (result) => {
-        try {
-          const JSONContent = textToTipTapJSON(result);
-          const savedAIMessage = await saveMessageToDb(
-            ticketId,
-            aiUserId,
-            JSONContent,
-            false,
-          );
-          if (!savedAIMessage) {
-            return;
-          }
+    try {
+      // ai 不响应 closed 状态的工单 和 已经转人工的工单
+      const ticket = await db.query.tickets.findFirst({
+        where: (t, { eq }) => eq(t.id, ticketId),
+        columns: {
+          id: true,
+          title: true,
+          description: true,
+          module: true,
+          category: true,
+          status: true,
+        },
+      });
 
-          // Increment the AI response count for this ticket (use latest value)
-          const latest =
-            aiResponseCountCache.get<number>(ticketId) ?? beforeCount;
-          aiResponseCountCache.set(ticketId, latest + 1);
+      if (!ticket || ticket.status === "resolved") {
+        logInfo(`Ticket ${ticketId} is closed or not found, skip AI response.`);
+        clearAIInFlight(ticketId);
+        return;
+      }
 
-          broadcastToRoom(ticketId, {
-            type: "new_message",
-            messageId: savedAIMessage.id,
-            roomId: ticketId,
-            userId: aiUserId,
-            content: savedAIMessage.content,
-            timestamp: new Date(savedAIMessage.createdAt).getTime(),
-            isInternal: false,
-          });
-        } finally {
-          // Always clear lock and timeout
-          aiProcessingSet.delete(ticketId);
-          const timeout = aiProcessingTimeouts.get(ticketId);
-          if (timeout) {
-            clearTimeout(timeout);
-            aiProcessingTimeouts.delete(ticketId);
-          }
-        }
-      },
-      (error: unknown) => {
-        logError("Error handling AI response:", error);
-        // Clear lock and timeout on error
-        aiProcessingSet.delete(ticketId);
-        const timeout = aiProcessingTimeouts.get(ticketId);
-        if (timeout) {
-          clearTimeout(timeout);
-          aiProcessingTimeouts.delete(ticketId);
-        }
+      const handoffRecord = await db.query.handoffRecords.findFirst({
+        where: (h, { eq }) => eq(h.ticketId, ticketId),
+        columns: {
+          id: true,
+          notificationSent: true,
+          handoffReason: false,
+          priority: false,
+          sentiment: false,
+        },
+      });
+
+      if (handoffRecord?.notificationSent) {
+        logInfo(`Ticket ${ticketId} has already been handoff, skip AI response.`);
+        clearAIInFlight(ticketId);
+        return;
+      }
+
+      // Baseline count to ensure consistent increment
+      const beforeCount = aiResponseCountCache.get<number>(ticketId) ?? 0;
+
+      const aiUserId =
+        workflowCache.getAiUserId(ticket.module) ??
+        workflowCache.getFallbackAiUserId();
+
+      if (!aiUserId) {
+        clearAIInFlight(ticketId);
         sendWsMessage(ws, {
           type: "error",
-          error: "Some error occurred in AI response.",
+          error: "Tentix Ai is not configured.",
         });
-      },
-    );
+        return;
+      }
+
+      runWithInterval(
+        () => getAIResponse(ticket),
+        () =>
+          broadcastToRoom(ticketId, {
+            type: "user_typing",
+            userId: aiUserId,
+            roomId: ticketId,
+            timestamp: Date.now(),
+          }),
+        2000,
+        async (result) => {
+          try {
+            const JSONContent = textToTipTapJSON(result.response);
+            const savedAIMessage = await saveMessageToDb(
+              ticketId,
+              aiUserId,
+              JSONContent,
+              false,
+            );
+            if (!savedAIMessage) {
+              return;
+            }
+
+            // Increment the AI response count for this ticket (use latest value)
+            const latest =
+              aiResponseCountCache.get<number>(ticketId) ?? beforeCount;
+            aiResponseCountCache.set(ticketId, latest + 1);
+
+            broadcastToRoom(ticketId, {
+              type: "new_message",
+              messageId: savedAIMessage.id,
+              roomId: ticketId,
+              userId: aiUserId,
+              content: savedAIMessage.content,
+              timestamp: new Date(savedAIMessage.createdAt).getTime(),
+              isInternal: false,
+            });
+
+            if (result.ragTrace) {
+              try {
+                const traceMessage = formatRagTraceMessage(
+                  result.ragTrace,
+                  savedAIMessage.id,
+                );
+                const savedTraceMessage = await saveMessageToDb(
+                  ticketId,
+                  aiUserId,
+                  plainTextToTipTapJSON(traceMessage),
+                  true,
+                );
+                if (savedTraceMessage) {
+                  broadcastInternalMessage(ticketId, aiUserId, savedTraceMessage);
+                }
+              } catch (error) {
+                logError("Error saving RAG trace message:", error);
+              }
+            }
+          } finally {
+            // Always clear lock and timeout
+            clearAIInFlight(ticketId);
+          }
+        },
+        (error: unknown) => {
+          logError("Error handling AI response:", error);
+          // Clear lock and timeout on error
+          clearAIInFlight(ticketId);
+          sendWsMessage(ws, {
+            type: "error",
+            error: "Some error occurred in AI response.",
+          });
+        },
+      );
+    } catch (error) {
+      logError("Error preparing AI response:", error);
+      clearAIInFlight(ticketId);
+      sendWsMessage(ws, {
+        type: "error",
+        error: "Some error occurred in AI response.",
+      });
+    }
   }
 }
 
@@ -438,7 +462,7 @@ msgEmitter.on("new_message", async function ({ ws, ctx, message }) {
 // 广播消息
 msgEmitter.on("new_message", function ({ ws, ctx, message }) {
   const broadcastExclude = message.isInternal
-    ? [ctx.clientId, roomCustomerMap.get(ctx.roomId)!]
+    ? getInternalMessageBroadcastExclude(ctx.roomId, ctx.clientId)
     : [ctx.clientId];
   // Broadcast message to room
   broadcastToRoom(
@@ -462,6 +486,132 @@ msgEmitter.on("new_message", function ({ ws, ctx, message }) {
     timestamp: message.timestamp,
   });
 });
+
+function getInternalMessageBroadcastExclude(
+  roomId: string,
+  senderClientId?: string,
+): string[] {
+  const excluded = new Set<string>();
+  if (senderClientId) excluded.add(senderClientId);
+  for (const clientId of getCustomerClientIds(roomId)) {
+    excluded.add(clientId);
+  }
+  return Array.from(excluded);
+}
+
+function getCustomerClientIds(roomId: string): string[] {
+  const roomUsers = roomEmitter.roomUserRoles.get(roomId);
+  if (!roomUsers) return [];
+  return Array.from(roomUsers.entries())
+    .filter(([, userInfo]) => userInfo.role === "customer")
+    .map(([clientId]) => clientId);
+}
+
+function broadcastInternalMessage(
+  ticketId: string,
+  userId: number,
+  message: NonNullable<Awaited<ReturnType<typeof saveMessageToDb>>>,
+) {
+  broadcastToRoom(
+    ticketId,
+    {
+      type: "new_message",
+      messageId: message.id,
+      roomId: ticketId,
+      userId,
+      content: message.content,
+      timestamp: new Date(message.createdAt).getTime(),
+      isInternal: true,
+    },
+    getInternalMessageBroadcastExclude(ticketId),
+  );
+}
+
+function formatRagTraceMessage(trace: RagTrace, aiMessageId: number): string {
+  const lines = [
+    `RAG 召回证据：${formatRagStatus(trace)}`,
+    `关联 AI 回复：#${aiMessageId}`,
+    `客户问题：${trace.userQuery || "（空）"}`,
+  ];
+
+  if (trace.generatedQueries.length > 0) {
+    lines.push(`检索词：${trace.generatedQueries.join(" / ")}`);
+  }
+  if (trace.moduleFilter) {
+    lines.push(`模块过滤：${trace.moduleFilter}`);
+  }
+  if (typeof trace.durationMs === "number") {
+    lines.push(`耗时：${trace.durationMs}ms`);
+  }
+  if (trace.reason) {
+    lines.push(`原因：${trace.reason}`);
+  }
+
+  if (trace.hits.length === 0) {
+    return lines.join("\n");
+  }
+
+  lines.push("", "召回条目：");
+  for (const hit of trace.hits) {
+    lines.push(formatRagTraceHit(hit));
+  }
+  lines.push("", "完整正文请到知识库面板按 sourceId 搜索，再查看对应 chunk。");
+  return lines.join("\n");
+}
+
+function formatRagStatus(trace: RagTrace): string {
+  if (trace.status === "skipped") return "未检索";
+  if (trace.status === "search_failed") return "检索失败";
+  if (trace.status === "no_results") return "已检索，但无命中";
+  return `已检索，命中 ${trace.hits.length} 条`;
+}
+
+function formatRagTraceHit(hit: RagTraceHit): string {
+  const title =
+    getMetadataText(hit.metadata, "entry_title") ||
+    getMetadataText(hit.metadata, "doc_name") ||
+    "未命名知识";
+  const docName = getMetadataText(hit.metadata, "doc_name");
+  const revision = getMetadataText(hit.metadata, "revision");
+  const category = getMetadataText(hit.metadata, "category");
+  const scoreText = `${Math.round(hit.score * 100)}%`;
+  const providedChunkIds = hit.provided
+    .map((chunk) => formatChunkId(chunk.chunk_id))
+    .join(", ");
+  const lines = [
+    "",
+    `【${hit.rank}】${formatSourceType(hit.source_type)}｜${title}｜score ${scoreText}`,
+    `sourceId: ${hit.source_id || "（无）"}`,
+    `命中：chunk ${formatChunkId(hit.matched.chunk_id)}`,
+    `提供：chunk ${providedChunkIds || "无"}`,
+  ];
+
+  const metaParts = [
+    docName && `文档：${docName}`,
+    revision && `版本：${revision}`,
+    category && `分类：${category}`,
+  ].filter(Boolean);
+  if (metaParts.length > 0) {
+    lines.push(metaParts.join("｜"));
+  }
+  return lines.join("\n");
+}
+
+function formatSourceType(sourceType: RagTraceHit["source_type"]): string {
+  if (sourceType === "favorited_conversation") return "精选案例";
+  if (sourceType === "historical_ticket") return "历史工单";
+  return "通用知识";
+}
+
+function formatChunkId(chunkId: number | undefined): string {
+  return typeof chunkId === "number" ? String(chunkId) : "未知";
+}
+
+function getMetadataText(metadata: unknown, key: string): string {
+  if (!metadata || typeof metadata !== "object") return "";
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+}
 
 // 广播消息到观察者 sse 通知
 msgEmitter.on("new_message", function (...[props]) {
@@ -543,22 +693,83 @@ const chatRouter = factory
       const role = c.var.role;
 
       const rawSealosKubeconfig = c.req.header("x-sealos-kubeconfig");
-      if (rawSealosKubeconfig) {
+      const rawSealosToken = c.req.header("x-sealos-token");
+
+      let sealosArea: string | undefined;
+
+      if (rawSealosKubeconfig && rawSealosToken) {
+        if (!global.customEnv.SEALOS_APP_TOKEN) {
+          return c.json({ message: "SEALOS_APP_TOKEN not configured" }, 500);
+        }
+
+        let decodedKubeconfig: string;
+        let decodedToken: string;
+
         try {
-          const decoded = decodeURIComponent(rawSealosKubeconfig);
-          if (decoded.trim()) {
-            setUserSealosKubeconfig(userId, decoded);
-          }
+          decodedKubeconfig = decodeURIComponent(rawSealosKubeconfig);
+          decodedToken = decodeURIComponent(rawSealosToken);
         } catch {
           return c.json(
-            { message: "Invalid x-sealos-kubeconfig header" },
+            { message: "Invalid Sealos credential headers" },
             400,
           );
         }
+
+        if (!decodedKubeconfig.trim() || !decodedToken.trim()) {
+          return c.json(
+            { message: "Sealos token and kubeconfig cannot be empty" },
+            400,
+          );
+        }
+
+        let sealosJwtPayload: ReturnType<typeof parseSealosJWT>;
+        try {
+          sealosJwtPayload = parseSealosJWT(
+            decodedToken,
+            global.customEnv.SEALOS_APP_TOKEN,
+          );
+        } catch {
+          return c.json({ message: "Invalid Sealos session token" }, 400);
+        }
+
+        const matchingAreas = Object.entries(areaRegionUuidMap)
+          .filter(([, regionUid]) => regionUid === sealosJwtPayload.regionUid)
+          .map(([area]) => area);
+        const [verifiedArea] = matchingAreas;
+
+        if (!verifiedArea || matchingAreas.length !== 1) {
+          return c.json(
+            { message: "Unsupported or ambiguous Sealos region" },
+            400,
+          );
+        }
+
+        const sealosIdentity =
+          await c.var.db.query.userIdentities.findFirst({
+            where: and(
+              eq(schema.userIdentities.userId, userId),
+              eq(schema.userIdentities.provider, "sealos"),
+              eq(
+                schema.userIdentities.providerUserId,
+                sealosJwtPayload.userId,
+              ),
+            ),
+            columns: { id: true },
+          });
+
+        if (!sealosIdentity) {
+          return c.json(
+            { message: "Sealos session does not belong to current user" },
+            403,
+          );
+        }
+
+        sealosArea = verifiedArea;
+        setUserSealosKubeconfig(userId, sealosArea, decodedKubeconfig);
       }
 
       // Generate WebSocket token
-      const wsToken = generateToken(userId, role);
+      const wsToken = generateToken(userId, role, sealosArea);
       return c.json({
         token: wsToken,
         expiresIn: WS_TOKEN_EXPIRY_TIME / 1000, // Convert to seconds
@@ -633,7 +844,7 @@ const chatRouter = factory
         };
       }
 
-      const { userId, role } = tokenData;
+      const { userId, role, sealosArea } = tokenData;
 
       // Check if user has permission to access this ticket
       const roomMembers = await MyCache.getTicketMembers(ticketId);
@@ -656,18 +867,6 @@ const chatRouter = factory
         return {
           async onOpen(_evt, ws) {
             logInfo(`Client connected: ${clientId}, UserId: ${userId}`);
-
-            if (role === "customer") {
-              const sealosKubeconfig = getUserSealosKubeconfig(userId);
-              if (sealosKubeconfig) {
-                bindTicketSealosKubeconfig(
-                  ticketId,
-                  clientId,
-                  userId,
-                  sealosKubeconfig,
-                );
-              }
-            }
 
             roomEmitter.emit("user_join", {
               clientId,
@@ -735,6 +934,10 @@ const chatRouter = factory
                       error: "Message content is required",
                     });
                     return;
+                  }
+
+                  if (role === "customer" && sealosArea) {
+                    touchUserSealosKubeconfig(userId, sealosArea);
                   }
 
                   // Save message to database
@@ -885,10 +1088,6 @@ const chatRouter = factory
             }
           },
           onClose(_evt, ws) {
-            if (role === "customer") {
-              unbindTicketSealosKubeconfig(ticketId, clientId);
-            }
-
             // 如果是 customer 离开首先检查 房间是否有 agent，如果没有 agent 则将 ticket 状态变为 pending，如果有 检查ticket 最近一条消息是否是自己发的，如果是则 pending
             // 如果不是 customer 离开，则检查 ticket 最近一条消息是否是自己发的，如果是自己发的 则状态改为 in progress
             handleUserLeaveStatusUpdate(ticketId, userId, role);
@@ -904,10 +1103,6 @@ const chatRouter = factory
           },
 
           onError(evt, ws) {
-            if (role === "customer") {
-              unbindTicketSealosKubeconfig(ticketId, clientId);
-            }
-
             logError(
               `Client ${clientId} UserId: ${userId} Error handling WebSocket message:`,
               evt,

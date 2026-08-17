@@ -1,7 +1,7 @@
 export const SOURCE_WEIGHTS: Record<string, number> = {
   favorited_conversation: 1.0,
   historical_ticket: 0.8,
-  general_knowledge: 0.6,
+  general_knowledge: 1.0,
 };
 
 export const OPENAI_CONFIG = {

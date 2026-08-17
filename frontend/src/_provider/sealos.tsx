@@ -210,9 +210,14 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
 
         const cleanupApp = createSealosApp();
 
+        let currentLanguage = i18n.resolvedLanguage ?? i18n.language;
+        let hasReceivedLanguageChange = false;
+
         const handleI18nChange = (data: { currentLanguage: string }) => {
           const currentLng = i18n.resolvedLanguage;
           const newLng = data.currentLanguage;
+          hasReceivedLanguageChange = true;
+          currentLanguage = newLng;
 
           console.info("Sealos language change:", { currentLng, newLng });
 
@@ -227,11 +232,24 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
           handleI18nChange,
         );
 
-        // initialize language
-        const lang = await sealosApp.getLanguage();
-        if (i18n.resolvedLanguage !== lang.lng) {
-          i18n.changeLanguage(lang.lng);
-        }
+        void sealosApp
+          .getLanguage()
+          .then((lang) => {
+            if (hasReceivedLanguageChange) {
+              return;
+            }
+            currentLanguage = lang.lng;
+            if (i18n.resolvedLanguage !== lang.lng) {
+              void i18n.changeLanguage(lang.lng);
+            }
+            setState((prev) => ({
+              ...prev,
+              currentLanguage: lang.lng,
+            }));
+          })
+          .catch((error) => {
+            console.warn("Failed to initialize Sealos language:", error);
+          });
 
         // get session info
         console.info("Getting Sealos session...");
@@ -264,7 +282,7 @@ export function SealosProvider({ children }: { children: React.ReactNode }) {
           sealosUserId,
           sealosNs,
           sealosKubeconfig,
-          currentLanguage: lang.lng,
+          currentLanguage,
         });
 
         // cleanup

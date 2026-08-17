@@ -44,18 +44,22 @@ const staffListItemSchema = userBasicResponseSchema.extend({
   workload: z.enum(["Low", "Medium", "High"]),
 });
 
-const usersListItemSchema = createSelectSchema(schema.users).pick({
-  id: true,
-  name: true,
-  nickname: true,
-  realName: true,
-  phoneNum: true,
-  role: true,
-  avatar: true,
-  registerTime: true,
-  level: true,
-  email: true,
-});
+const usersListItemSchema = createSelectSchema(schema.users)
+  .pick({
+    id: true,
+    name: true,
+    nickname: true,
+    realName: true,
+    phoneNum: true,
+    role: true,
+    avatar: true,
+    registerTime: true,
+    level: true,
+    email: true,
+  })
+  .extend({
+    sealosId: z.string().nullable(),
+  });
 
 const usersPaginationSchema = z.object({
   page: z.number().int().positive(),
@@ -253,8 +257,36 @@ const adminRouter = factory
         .limit(limitNum)
         .offset(offset);
 
+      const userIds = users.map((user) => user.id);
+      const sealosIdentities =
+        userIds.length > 0
+          ? await db
+              .select({
+                userId: schema.userIdentities.userId,
+                providerUserId: schema.userIdentities.providerUserId,
+                metadata: schema.userIdentities.metadata,
+              })
+              .from(schema.userIdentities)
+              .where(
+                and(
+                  inArray(schema.userIdentities.userId, userIds),
+                  eq(schema.userIdentities.provider, "sealos"),
+                ),
+              )
+          : [];
+
+      const sealosIdByUserId = new Map(
+        sealosIdentities.map((identity) => [
+          identity.userId,
+          identity.metadata?.sealos?.accountId || identity.providerUserId,
+        ]),
+      );
+
       return c.json({
-        users,
+        users: users.map((user) => ({
+          ...user,
+          sealosId: sealosIdByUserId.get(user.id) ?? null,
+        })),
         pagination: {
           page: pageNum,
           limit: limitNum,

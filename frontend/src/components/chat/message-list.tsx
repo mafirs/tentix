@@ -5,6 +5,7 @@ import { TypingIndicator } from "./typing-indicator.tsx";
 import { type TicketType } from "tentix-server/rpc";
 import useLocalUser from "@hook/use-local-user.tsx";
 import { useChatStore } from "@store/index";
+import { useInternalMessages } from "@store/internal-messages";
 
 interface MessageListProps {
   messages: TicketType["messages"];
@@ -30,6 +31,14 @@ export function MessageList({
   const notCustomer = role !== "customer";
   const { kbSelectionMode, selectedMessageIds, toggleSelectMessage } =
     useChatStore();
+  const { showInternal } = useInternalMessages();
+  const visibleMessages = useMemo(
+    () =>
+      notCustomer && !showInternal
+        ? messages.filter((message) => !message.isInternal)
+        : messages,
+    [messages, notCustomer, showInternal],
+  );
 
   // 查找真正的滚动容器（Radix ScrollArea 的 Viewport）
   const [scrollContainerFound, setScrollContainerFound] = useState(false);
@@ -189,8 +198,8 @@ export function MessageList({
   };
 
   const messageGroups = useMemo(
-    () => groupMessagesByDate(messages),
-    [messages],
+    () => groupMessagesByDate(visibleMessages),
+    [visibleMessages],
   );
 
   // Observer: 检测消息是否进入视图

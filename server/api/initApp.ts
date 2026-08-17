@@ -68,7 +68,7 @@ export async function ensureGlobalVariables() {
   if (!global.staffMap) {
     await refreshStaffMap();
   }
-  if (!global.todayTicketCount) {
+  if (global.todayTicketCount === undefined) {
     await initTodayTicketCount();
   }
   if (!global.i18n) {

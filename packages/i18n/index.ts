@@ -1,5 +1,5 @@
 import i18nBase from "i18next";
-import { initReactI18next, useTranslation } from "react-i18next";
+import { initReactI18next } from "react-i18next";
 export const translations = {
   en: {
     translation: {
@@ -284,7 +284,7 @@ export const translations = {
       total: "Total",
       page: "Page",
       no_tickets_found: "No tickets found",
-      no_tickets_found_for_sealos_user: "No tickets found for this Sealos ID",
+      no_tickets_found_for_sealos_user: "No tickets found for this User ID",
       no_tickets_received: "We haven't received any tickets from users yet.",
 
       // Header defaults
@@ -311,6 +311,7 @@ export const translations = {
       user: "User",
       csr: "CSR",
       internal: "Internal",
+      internal_messages: "Internal Messages",
       irrelevant: "Irrelevant",
       unresolved: "Unresolved",
       unfriendly: "Unfriendly",
@@ -751,7 +752,7 @@ export const translations = {
       // Additional translations for ticket details sidebar
       basic_info: "基本信息",
       user_info: "用户信息",
-      sealos_id: "用户ID",
+      sealos_id: "用户 ID",
       name: "用户名",
       ticket_id: "工单ID",
       assignees: "负责人",
@@ -853,7 +854,7 @@ export const translations = {
       total: "总共",
       page: "页",
       no_tickets_found: "未找到工单",
-      no_tickets_found_for_sealos_user: "未找到该 Sealos 用户的工单",
+      no_tickets_found_for_sealos_user: "未找到该用户 ID 的工单",
       no_tickets_received: "暂未收到任何用户工单。",
 
       // Header defaults
@@ -879,6 +880,7 @@ export const translations = {
       user: "用户",
       csr: "客服",
       internal: "内部",
+      internal_messages: "内部消息",
       irrelevant: "不相关",
       unresolved: "未解决",
       unfriendly: "不友好",
@@ -1158,8 +1160,7 @@ export const i18next = i18nBase.use(initReactI18next).init({
 export default i18nBase;
 
 export function joinTrans(keys: string[]) {
-  const { i18n } = useTranslation();
-  const join = i18n.language === "zh" ? "" : " ";
+  const join = i18nBase.language === "zh" ? "" : " ";
   return keys.join(join);
 }
 

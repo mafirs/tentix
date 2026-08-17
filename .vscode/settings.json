@@ -31,5 +31,6 @@
     "uncategorized",
     "wechat",
     "weixin"
-  ]
+  ],
+  "markdown.validate.enabled": false
 }

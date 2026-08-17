@@ -109,8 +109,10 @@ export const Route = createFileRoute("/staff")({
 
     // 如果用户是customer角色，重定向到用户页面
     if (context.authContext.user.role === "customer") {
-      redirect({ to: "/user/tickets/list" });
-      return;
+      redirect({
+        to: "/user/tickets/list",
+        throw: true,
+      });
     }
   },
   component: StaffLayout,

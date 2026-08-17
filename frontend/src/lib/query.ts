@@ -221,57 +221,79 @@ export const ticketsQueryOptions = (id: string) =>
     refetchOnWindowFocus: true, // 窗口聚焦时重新获取
   });
 
+type SealosWsCredentials = {
+  token: string;
+  kubeconfig: string;
+};
+
 type WsTokenQueryOptionsConfig = {
   testUserId?: string;
   ticketId: string;
-  getSealosKubeconfig?: () => Promise<string | null>;
+  sealosArea?: string | null;
+  getSealosCredentials?: () => Promise<SealosWsCredentials | null>;
 };
+
+export async function fetchWsToken({
+  testUserId,
+  getSealosCredentials,
+}: Pick<WsTokenQueryOptionsConfig, "testUserId" | "getSealosCredentials">) {
+  let headers: Record<string, string> | undefined;
+
+  if (getSealosCredentials) {
+    try {
+      const sealosCredentials = await getSealosCredentials();
+      if (sealosCredentials) {
+        headers = {
+          "x-sealos-token": encodeURIComponent(sealosCredentials.token),
+          "x-sealos-kubeconfig": encodeURIComponent(
+            sealosCredentials.kubeconfig,
+          ),
+        };
+      }
+    } catch (error) {
+      console.warn(
+        "Failed to get sealos credentials for ws token request:",
+        error,
+      );
+    }
+  }
+
+  const res = await apiClient.chat.token.$get(
+    { query: { testUserId } },
+    headers ? { headers } : undefined,
+  );
+
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as {
+      message?: string;
+    };
+    throw new Error(err.message || "Failed to get ws token");
+  }
+
+  return await res.json();
+}
 
 export const wsTokenQueryOptions = ({
   testUserId,
   ticketId,
-  getSealosKubeconfig,
+  sealosArea,
+  getSealosCredentials,
 }: WsTokenQueryOptionsConfig) =>
   queryOptions({
     queryKey: [
       "getWsToken",
       ticketId,
       testUserId ?? "",
-      getSealosKubeconfig ? "with-sealos-kc" : "without-sealos-kc",
+      sealosArea ?? "",
+      getSealosCredentials
+        ? "with-sealos-credentials"
+        : "without-sealos-credentials",
     ],
-    queryFn: async () => {
-      let headers: Record<string, string> | undefined;
-
-      if (getSealosKubeconfig) {
-        try {
-          const sealosKubeconfig = await getSealosKubeconfig();
-          if (sealosKubeconfig) {
-            headers = {
-              "x-sealos-kubeconfig": encodeURIComponent(sealosKubeconfig),
-            };
-          }
-        } catch (error) {
-          console.warn(
-            "Failed to get sealos kubeconfig for ws token request:",
-            error,
-          );
-        }
-      }
-
-      const res = await apiClient.chat.token.$get(
-        { query: { testUserId } },
-        headers ? { headers } : undefined,
-      );
-
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as {
-          message?: string;
-        };
-        throw new Error(err.message || "Failed to get ws token");
-      }
-
-      return await res.json();
-    },
+    queryFn: async () =>
+      fetchWsToken({
+        testUserId,
+        getSealosCredentials,
+      }),
     staleTime: 0,
     refetchOnMount: "always",
     refetchOnWindowFocus: false,
