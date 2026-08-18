@@ -187,8 +187,9 @@ const createExtensions = (
         });
       });
 
-      videoFiles.forEach((file) => {
-        editor.commands.insertContentAt(pos, {
+      if (videoFiles.length > 0) {
+        editor.commands.insertContentAt(pos, [
+          ...videoFiles.map((file) => ({
           type: "video",
           attrs: {
             id: randomId(),
@@ -198,8 +199,10 @@ const createExtensions = (
             isLocalFile: true,
             originalFile: file,
           },
-        });
-      });
+          })),
+          { type: "paragraph" },
+        ]);
+      }
     },
     onPaste: (editor, files, pasteSlice) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));

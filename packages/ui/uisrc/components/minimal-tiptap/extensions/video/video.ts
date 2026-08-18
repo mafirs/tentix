@@ -59,10 +59,12 @@ export const Video = Node.create<CustomVideoOptions>({
             maxFileSize: this.options.maxFileSize,
             allowBase64: false,
           });
-          this.options.onValidationError?.(errors);
+          if (errors.length > 0) {
+            this.options.onValidationError?.(errors);
+          }
           if (validFiles.length === 0) return false;
-          return commands.insertContent(
-            validFiles.map((file) => ({
+          return commands.insertContent([
+            ...validFiles.map((file) => ({
               type: this.name,
               attrs: {
                 id: randomId(),
@@ -73,7 +75,8 @@ export const Video = Node.create<CustomVideoOptions>({
                 originalFile: file,
               },
             })),
-          );
+            { type: "paragraph" },
+          ]);
         },
       toggleVideo:
         () =>

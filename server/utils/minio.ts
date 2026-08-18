@@ -12,11 +12,12 @@ const bucket = new S3Client({
 
 export async function getPresignedUrl(fileName: string, fileType: string): Promise<{ url: string; fileName: string }> {
   try {
-    // For avatar files, use the filename as is (already has userid-timestamp format)
-    // For other files, add date prefix and random string
-    const newFileName = fileName.startsWith('avatar/') 
-      ? fileName 
-      : `${new Date().toJSON().split('T')[0]}/${Math.random().toString(36).slice(-6)}-${fileName}`;
+    // For videos, use an opaque random key; keep existing naming for other files
+    const newFileName = fileType === "video/mp4"
+      ? crypto.randomUUID()
+      : fileName.startsWith('avatar/') 
+        ? fileName 
+        : `${new Date().toJSON().split('T')[0]}/${Math.random().toString(36).slice(-6)}-${fileName}`;
     
     const uploadUrl = bucket.presign(newFileName, {
       expiresIn: 3600, // 1 hour
