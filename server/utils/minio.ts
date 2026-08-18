@@ -40,3 +40,19 @@ export async function removeFile(fileName: string) {
     throw new S3Error("Error removing file", error as Error);
   }
 }
+
+export async function getFileStat(fileName: string) {
+  try {
+    const stat = await bucket.file(fileName).stat();
+    return {
+      size: stat.size,
+      type: stat.type,
+    };
+  } catch (error) {
+    throw new S3Error("Error checking file in storage", error as Error);
+  }
+}
+
+export function getFileForDownload(fileName: string) {
+  return bucket.file(fileName);
+}

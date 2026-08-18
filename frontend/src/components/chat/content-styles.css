@@ -107,6 +107,29 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
+.content-video-container {
+  display: flex;
+  width: 100%;
+  max-width: 640px;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.content-video {
+  width: 100%;
+  max-height: 480px;
+  border-radius: 6px;
+  background: #18181b;
+}
+
+.content-video-download {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
 .content-bold {
   font-weight: 600;
 }

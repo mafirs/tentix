@@ -1,5 +1,6 @@
 import { type ReactNode, useMemo } from "react";
 import { type JSONContent } from "@tiptap/react";
+import { DownloadIcon } from "lucide-react";
 import { PhotoProvider, PhotoView } from "react-photo-view";
 import "react-photo-view/dist/react-photo-view.css";
 import hljs from "highlight.js/lib/core";
@@ -232,6 +233,39 @@ export const RenderContent = ({
           </PhotoView>
         </div>
       </PhotoProvider>
+    );
+  }
+
+  if (content.type === "video") {
+    const src = String(content.attrs?.src || "");
+    const fileName = String(
+      content.attrs?.fileName || content.attrs?.title || "video.mp4",
+    );
+    const storageFileName = String(content.attrs?.storageFileName || "");
+    const downloadUrl = new URL("/api/file/download", window.location.origin);
+    downloadUrl.searchParams.set("fileName", storageFileName);
+    downloadUrl.searchParams.set("downloadName", fileName);
+
+    return (
+      <div className="content-video-container">
+        <video
+          className="content-video"
+          src={src}
+          controls
+          preload="metadata"
+          aria-label={fileName}
+        />
+        <a
+          className="content-video-download"
+          href={downloadUrl.toString()}
+          download={fileName}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <DownloadIcon className="size-4" />
+          {fileName}
+        </a>
+      </div>
     );
   }
 

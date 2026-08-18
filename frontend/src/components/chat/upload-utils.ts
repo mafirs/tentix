@@ -29,15 +29,45 @@ class UploadError extends Error {
   }
 }
 
+const VIDEO_FILE_SIZE_LIMIT = 52_428_800;
+const VIDEO_CHECK_NO_PROGRESS_TIMEOUT = 60_000;
+
+export type UploadPhase = "uploading" | "checking";
+
+export interface UploadProgress {
+  uploadedBytes: number;
+  totalBytes: number;
+  currentFile?: string;
+  phase: UploadPhase;
+}
+
+export interface UploadedFile {
+  id: string;
+  url: string;
+  fileName: string;
+}
+
+export interface UploadResult {
+  processedContent: JSONContentZod;
+  uploadedFiles: UploadedFile[];
+}
+
 // 上传单个文件
-const uploadFile = async (file: File): Promise<string> => {
+const uploadFile = async (
+  file: File,
+  onProgress: (loaded: number, phase: UploadPhase) => void,
+): Promise<{ url: string; fileName: string }> => {
   try {
+    if (file.type === "video/mp4" && file.size > VIDEO_FILE_SIZE_LIMIT) {
+      throw new UploadError("Video file must not exceed 50 MB", file.name);
+    }
     const presignedUrl = new URL(
       "/api/file/presigned-url",
       window.location.origin,
     );
     presignedUrl.searchParams.set("fileName", file.name);
     presignedUrl.searchParams.set("fileType", file.type);
+    presignedUrl.searchParams.set("fileSize", String(file.size));
 
     await waitForSealosAuthReady(presignedUrl.toString());
 
@@ -68,18 +98,13 @@ const uploadFile = async (file: File): Promise<string> => {
       );
     }
 
-    const { url, srcUrl } = await presignedResponse.json();
+    const { url, srcUrl, fileName } = await presignedResponse.json();
 
-    const response = await fetch(url, {
-      method: "PUT",
-      body: file,
-    });
+    await putFileWithProgress(url, file, (loaded) =>
+      onProgress(loaded, "uploading"),
+    );
 
-    if (!response.ok) {
-      throw new UploadError("Failed to upload file to storage", file.name);
-    }
-
-    return srcUrl;
+    return { url: srcUrl, fileName };
   } catch (error) {
     if (error instanceof UploadError) {
       throw error;
@@ -90,6 +115,115 @@ const uploadFile = async (file: File): Promise<string> => {
       error,
     );
   }
+};
+
+const putFileWithProgress = (
+  url: string,
+  file: File,
+  onProgress: (loaded: number) => void,
+): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", url);
+    request.setRequestHeader("Content-Type", file.type);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded);
+    };
+    request.onload = () =>
+      request.status >= 200 && request.status < 300
+        ? resolve()
+        : reject(
+            new UploadError("Failed to upload file to storage", file.name),
+          );
+    request.onerror = () =>
+      reject(new UploadError("Failed to upload file to storage", file.name));
+    request.onabort = () =>
+      reject(new UploadError("Upload was interrupted", file.name));
+    request.send(file);
+  });
+
+const verifyUploadedVideo = async (
+  srcUrl: string,
+  fileName: string,
+  file: File,
+): Promise<void> => {
+  const verifyUrl = new URL("/api/file/verify", window.location.origin);
+  verifyUrl.searchParams.set("fileName", fileName);
+  verifyUrl.searchParams.set("fileType", "video/mp4");
+  verifyUrl.searchParams.set("fileSize", String(file.size));
+  const token = window.localStorage.getItem("token");
+  const headers: HeadersInit = token
+    ? { Authorization: "Bearer " + token }
+    : {};
+  const response = await fetch(verifyUrl, { headers });
+  if (!response.ok) {
+    throw new UploadError(
+      "Video could not be used. Please upload it again.",
+      file.name,
+    );
+  }
+  await waitForPlayableVideo(srcUrl, file.name);
+};
+
+const waitForPlayableVideo = (srcUrl: string, fileName: string) =>
+  new Promise<void>((resolve, reject) => {
+    const video = document.createElement("video");
+    let noProgressTimer: number | undefined;
+    const finish = (error?: Error) => {
+      if (noProgressTimer !== undefined) {
+        window.clearTimeout(noProgressTimer);
+      }
+      video.removeAttribute("src");
+      video.load();
+      error ? reject(error) : resolve();
+    };
+    const resetNoProgressTimer = () => {
+      if (noProgressTimer !== undefined) {
+        window.clearTimeout(noProgressTimer);
+      }
+      noProgressTimer = window.setTimeout(
+        () =>
+          finish(
+            new UploadError(
+              "Video check timed out. Please upload it again.",
+              fileName,
+            ),
+          ),
+        VIDEO_CHECK_NO_PROGRESS_TIMEOUT,
+      );
+    };
+    video.preload = "auto";
+    video.onloadstart = resetNoProgressTimer;
+    video.onprogress = resetNoProgressTimer;
+    video.onstalled = resetNoProgressTimer;
+    video.onwaiting = resetNoProgressTimer;
+    video.oncanplay = () => finish();
+    video.onerror = () =>
+      finish(
+        new UploadError(
+          "Video could not be played. Please upload it again.",
+          fileName,
+        ),
+      );
+    resetNoProgressTimer();
+    video.src = srcUrl;
+    video.load();
+  });
+
+export const removeUploadedFiles = async (
+  files: UploadedFile[],
+): Promise<void> => {
+  const token = window.localStorage.getItem("token");
+  const headers: HeadersInit = token
+    ? { Authorization: "Bearer " + token }
+    : {};
+  await Promise.allSettled(
+    files.map((file) => {
+      const removeUrl = new URL("/api/file/remove", window.location.origin);
+      removeUrl.searchParams.set("fileName", file.fileName);
+      return fetch(removeUrl, { method: "DELETE", headers });
+    }),
+  );
 };
 
 // 文件信息接口
@@ -105,7 +239,7 @@ const extractFilesToUpload = (content: JSONContentZod): FileToUpload[] => {
 
   const traverse = (node: any): void => {
     if (
-      node.type === "image" &&
+      (node.type === "image" || node.type === "video") &&
       node.attrs?.isLocalFile &&
       node.attrs?.originalFile
     ) {
@@ -128,23 +262,11 @@ const extractFilesToUpload = (content: JSONContentZod): FileToUpload[] => {
   return filesToUpload;
 };
 
-// 上传进度信息接口
-interface UploadProgress {
-  uploaded: number;
-  total: number;
-  currentFile?: string;
-}
-
-// 上传结果接口
-interface UploadResult {
-  processedContent: JSONContentZod;
-  uploadedFiles: Array<{ id: string; url: string }>;
-}
-
 // 内部使用的上传文件信息接口
 interface UploadedFileInfo {
   id: string;
   url: string;
+  fileName: string;
   blobUrl: string;
 }
 
@@ -163,7 +285,28 @@ export const processFilesAndUpload = async (
   }
 
   const uploadedFiles: UploadedFileInfo[] = [];
-  let uploadedCount = 0;
+  const totalBytes = filesToUpload.reduce(
+    (total, item) => total + item.file.size,
+    0,
+  );
+  const uploadedBytes = new Map<string, number>();
+  const reportProgress = (
+    id: string,
+    file: File,
+    loaded: number,
+    phase: UploadPhase,
+  ) => {
+    uploadedBytes.set(id, loaded);
+    onProgress?.({
+      uploadedBytes: Array.from(uploadedBytes.values()).reduce(
+        (total, value) => total + value,
+        0,
+      ),
+      totalBytes,
+      currentFile: file.name,
+      phase,
+    });
+  };
 
   // 并发上传文件（限制并发数）
   const CONCURRENT_UPLOADS = 3;
@@ -174,26 +317,23 @@ export const processFilesAndUpload = async (
 
     const batchPromises = batch.map(async ({ id, file, blobUrl }) => {
       try {
-        onProgress?.({
-          uploaded: uploadedCount,
-          total: filesToUpload.length,
-          currentFile: file.name,
-        });
+        reportProgress(id, file, 0, "uploading");
 
-        const uploadedUrl = await uploadFile(file);
+        const uploaded = await uploadFile(file, (loaded, phase) =>
+          reportProgress(id, file, loaded, phase),
+        );
 
         uploadedFiles.push({
           id,
-          url: uploadedUrl,
+          url: uploaded.url,
+          fileName: uploaded.fileName,
           blobUrl,
         });
 
-        uploadedCount++;
-
-        onProgress?.({
-          uploaded: uploadedCount,
-          total: filesToUpload.length,
-        });
+        if (file.type === "video/mp4") {
+          reportProgress(id, file, file.size, "checking");
+          await verifyUploadedVideo(uploaded.url, uploaded.fileName, file);
+        }
       } catch (error) {
         console.error(`Failed to upload ${file.name}:`, error);
 
@@ -208,18 +348,31 @@ export const processFilesAndUpload = async (
     });
 
     // 等待当前批次完成
-    await Promise.all(batchPromises);
+    const results = await Promise.allSettled(batchPromises);
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failed) {
+      await removeUploadedFiles(uploadedFiles);
+      throw failed.reason;
+    }
   }
 
   // 更新内容，替换 blob URL 为真实 URL
   const processedContent = updateContentUrls(content, uploadedFiles);
 
   // 清理 blob URL
-  cleanupBlobUrls(filesToUpload);
+  cleanupBlobUrls(
+    filesToUpload.filter(({ file }) => !file.type.startsWith("video/")),
+  );
 
   return {
     processedContent,
-    uploadedFiles: uploadedFiles.map(({ id, url }) => ({ id, url })),
+    uploadedFiles: uploadedFiles.map(({ id, url, fileName }) => ({
+      id,
+      url,
+      fileName,
+    })),
   };
 };
 
@@ -243,11 +396,13 @@ const updateContentUrls = (
   content: JSONContentZod,
   uploadedFiles: UploadedFileInfo[],
 ): JSONContentZod => {
-  const urlMap = new Map(uploadedFiles.map((f) => [f.id, f.url]));
+  const urlMap = new Map(
+    uploadedFiles.map(({ id, url, fileName }) => [id, { url, fileName }]),
+  );
 
   const traverse = (node: any): any => {
     if (
-      node.type === "image" &&
+      (node.type === "image" || node.type === "video") &&
       node.attrs?.isLocalFile &&
       urlMap.has(node.attrs.id)
     ) {
@@ -255,9 +410,12 @@ const updateContentUrls = (
         ...node,
         attrs: {
           ...node.attrs,
-          src: urlMap.get(node.attrs.id), // 替换为真实 URL
+          src: urlMap.get(node.attrs.id)?.url, // 替换为真实 URL
+          ...(node.type === "video"
+            ? { storageFileName: urlMap.get(node.attrs.id)?.fileName }
+            : {}),
           isLocalFile: false, // 标记为已上传
-          originalFile: undefined, // 清除原始文件引用
+          originalFile: node.type === "video" ? null : undefined,
         },
       };
     }
