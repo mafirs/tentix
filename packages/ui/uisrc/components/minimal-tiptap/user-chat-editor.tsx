@@ -6,7 +6,6 @@ import { cn } from "uisrc/lib/utils.ts";
 import { LinkBubbleMenu } from "./components/bubble-menu/link-bubble-menu.tsx";
 import { MeasuredContainer } from "./components/measured-container.tsx";
 import { SectionTwo } from "./components/section/two.tsx";
-import { VideoEditDialog } from "./components/video/video-edit-dialog.tsx";
 import { AttachmentEditDialog } from "./components/attachment/attachment-edit-dialog.tsx";
 import { useMinimalTiptapEditor } from "./hooks/use-minimal-tiptap.ts";
 import { cleanupBlobUrls } from "./utils.ts";
@@ -23,7 +22,6 @@ export const Toolbar = ({ editor }: { editor: Editor }) => (
         size="sm"
         className="!w-9 !h-9"
       />
-      <VideoEditDialog editor={editor} size="sm" />
       <AttachmentEditDialog editor={editor} size="sm" />
     </div>
   </div>

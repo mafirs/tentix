@@ -8,6 +8,8 @@ import {
 } from "../../utils.ts";
 import { VideoViewBlock } from "./components/video-view-block.tsx";
 
+export const VIDEO_MAX_SIZE = 50 * 1024 * 1024;
+
 interface CustomVideoOptions extends Omit<FileValidationOptions, "allowBase64"> {
   onValidationError?: (errors: FileError[]) => void;
 }
@@ -29,7 +31,7 @@ export const Video = Node.create<CustomVideoOptions>({
   addOptions() {
     return {
       allowedMimeTypes: ["video/mp4"],
-      maxFileSize: 50 * 1024 * 1024,
+      maxFileSize: VIDEO_MAX_SIZE,
     };
   },
   addAttributes() {

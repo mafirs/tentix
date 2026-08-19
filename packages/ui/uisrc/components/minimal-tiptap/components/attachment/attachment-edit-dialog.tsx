@@ -19,8 +19,8 @@ export const AttachmentEditDialog = ({
   return (
     <>
       <ToolbarButton
-        tooltip="Attachment"
-        aria-label="Attachment"
+        tooltip="Upload file"
+        aria-label="Upload file"
         size={size}
         variant={variant}
         onClick={() => inputRef.current?.click()}
@@ -30,12 +30,12 @@ export const AttachmentEditDialog = ({
       <input
         ref={inputRef}
         type="file"
-        accept={ATTACHMENT_ACCEPT}
+        accept={`${ATTACHMENT_ACCEPT},video/mp4`}
         multiple
         className="hidden"
         onChange={(event) => {
           if (event.target.files?.length) {
-            editor.commands.setAttachments(Array.from(event.target.files));
+            editor.commands.setUploadFiles(Array.from(event.target.files));
           }
           event.target.value = "";
         }}

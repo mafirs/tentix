@@ -14,6 +14,7 @@ import {
   Link,
   Image,
   Video,
+  VIDEO_MAX_SIZE,
   HorizontalRule,
   CodeBlockLowlight,
   Selection,
@@ -147,7 +148,7 @@ const createExtensions = (
   }),
   Video.configure({
     allowedMimeTypes: ["video/mp4"],
-    maxFileSize: 50 * 1024 * 1024,
+    maxFileSize: VIDEO_MAX_SIZE,
     onValidationError(errors) {
       toast({
         title: "视频验证错误",
@@ -181,7 +182,7 @@ const createExtensions = (
     ],
     maxFileSize: (mimeType) =>
       mimeType === "video/mp4"
-        ? 50 * 1024 * 1024
+        ? VIDEO_MAX_SIZE
         : isGenericAttachmentMimeType(mimeType)
           ? ATTACHMENT_MAX_SIZE
           : 5 * 1024 * 1024,

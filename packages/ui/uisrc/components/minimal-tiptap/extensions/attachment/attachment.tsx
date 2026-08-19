@@ -2,6 +2,7 @@ import { Node } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { filterFiles, randomId, type FileError, type FileValidationOptions } from "../../utils.ts";
 import { AttachmentViewBlock } from "./components/attachment-view-block.tsx";
+import { VIDEO_MAX_SIZE } from "../video/video.ts";
 
 export const ATTACHMENT_MIME_TYPES = [
   "application/pdf",
@@ -33,6 +34,7 @@ declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     customAttachment: {
       setAttachments: (files: File[], position?: number) => ReturnType;
+      setUploadFiles: (files: File[]) => ReturnType;
       toggleAttachment: () => ReturnType;
     };
   }
@@ -99,6 +101,42 @@ export const Attachment = Node.create<AttachmentOptions>({
           })),
           { type: "paragraph" },
         ]);
+      },
+      setUploadFiles: (files) => ({ commands }) => {
+        const attachmentMaxFileSize = this.options.maxFileSize;
+        const [validFiles, errors] = filterFiles(files, {
+          allowedMimeTypes: [...this.options.allowedMimeTypes, "video/mp4"],
+          maxFileSize: (mimeType) =>
+            mimeType === "video/mp4"
+              ? VIDEO_MAX_SIZE
+              : typeof attachmentMaxFileSize === "function"
+                ? attachmentMaxFileSize(mimeType)
+                : attachmentMaxFileSize,
+          allowBase64: false,
+        });
+
+        if (errors.length > 0) {
+          this.options.onValidationError?.(errors);
+        }
+
+        if (validFiles.length === 0) return false;
+
+        const videoFiles = validFiles.filter(
+          (file) => file.type === "video/mp4",
+        );
+        const attachmentFiles = validFiles.filter((file) =>
+          isGenericAttachmentMimeType(file.type),
+        );
+        let didInsert = false;
+
+        if (videoFiles.length > 0) {
+          didInsert = commands.setVideos(videoFiles) || didInsert;
+        }
+        if (attachmentFiles.length > 0) {
+          didInsert = commands.setAttachments(attachmentFiles) || didInsert;
+        }
+
+        return didInsert;
       },
       toggleAttachment: () => ({ editor }) => {
         const input = document.createElement("input");
