@@ -203,7 +203,7 @@ export function MessageInput({ onSendMessage }: MessageInputProps) {
             <UploadIcon className="h-4 w-4 animate-pulse text-zinc-600" />
             <span className="text-zinc-600">
               {uploadProgress.phase === "checking"
-                ? t("checking_video")
+                ? t("checking_file")
                 : t("uploading")}
             </span>
           </div>

@@ -2,6 +2,10 @@
 
 import { type JSONContentZod } from "tentix-server/types";
 import { waitForSealosAuthReady } from "../../_provider/sealos";
+import {
+  ATTACHMENT_MAX_SIZE,
+  isGenericAttachmentMimeType,
+} from "tentix-ui";
 
 // 错误处理工具函数
 const getErrorMessage = (error: unknown): string => {
@@ -30,6 +34,7 @@ class UploadError extends Error {
 }
 
 const VIDEO_FILE_SIZE_LIMIT = 52_428_800;
+const GENERIC_FILE_SIZE_LIMIT = ATTACHMENT_MAX_SIZE;
 const VIDEO_CHECK_NO_PROGRESS_TIMEOUT = 60_000;
 
 export type UploadPhase = "uploading" | "checking";
@@ -60,6 +65,9 @@ const uploadFile = async (
   try {
     if (file.type === "video/mp4" && file.size > VIDEO_FILE_SIZE_LIMIT) {
       throw new UploadError("Video file must not exceed 50 MB", file.name);
+    }
+    if (isGenericAttachmentMimeType(file.type) && file.size > GENERIC_FILE_SIZE_LIMIT) {
+      throw new UploadError("Attachment file must not exceed 25 MB", file.name);
     }
     const presignedUrl = new URL(
       "/api/file/presigned-url",
@@ -165,6 +173,36 @@ const verifyUploadedVideo = async (
   await waitForPlayableVideo(srcUrl, file.name);
 };
 
+const verifyUploadedGenericFile = async (
+  storageFileName: string,
+  file: File,
+): Promise<void> => {
+  const verifyUrl = new URL("/api/file/verify", window.location.origin);
+  verifyUrl.searchParams.set("fileName", storageFileName);
+  verifyUrl.searchParams.set("originalFileName", file.name);
+  verifyUrl.searchParams.set("fileType", file.type);
+  verifyUrl.searchParams.set("fileSize", String(file.size));
+  const token = window.localStorage.getItem("token");
+  const response = await fetch(verifyUrl, {
+    headers: token ? { Authorization: "Bearer " + token } : {},
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      message?: unknown;
+    } | null;
+    const message =
+      typeof body?.message === "string"
+        ? body.message
+        : response.status === 503
+          ? "File verification is temporarily unavailable"
+          : "File content does not match its declared format";
+    throw new UploadError(
+      message,
+      file.name,
+    );
+  }
+};
+
 const waitForPlayableVideo = (srcUrl: string, fileName: string) =>
   new Promise<void>((resolve, reject) => {
     const video = document.createElement("video");
@@ -239,7 +277,7 @@ const extractFilesToUpload = (content: JSONContentZod): FileToUpload[] => {
 
   const traverse = (node: any): void => {
     if (
-      (node.type === "image" || node.type === "video") &&
+      (node.type === "image" || node.type === "video" || node.type === "attachment") &&
       node.attrs?.isLocalFile &&
       node.attrs?.originalFile
     ) {
@@ -333,6 +371,9 @@ export const processFilesAndUpload = async (
         if (file.type === "video/mp4") {
           reportProgress(id, file, file.size, "checking");
           await verifyUploadedVideo(uploaded.url, uploaded.fileName, file);
+        } else if (isGenericAttachmentMimeType(file.type)) {
+          reportProgress(id, file, file.size, "checking");
+          await verifyUploadedGenericFile(uploaded.fileName, file);
         }
       } catch (error) {
         console.error(`Failed to upload ${file.name}:`, error);
@@ -402,7 +443,7 @@ const updateContentUrls = (
 
   const traverse = (node: any): any => {
     if (
-      (node.type === "image" || node.type === "video") &&
+      (node.type === "image" || node.type === "video" || node.type === "attachment") &&
       node.attrs?.isLocalFile &&
       urlMap.has(node.attrs.id)
     ) {
@@ -411,11 +452,14 @@ const updateContentUrls = (
         attrs: {
           ...node.attrs,
           src: urlMap.get(node.attrs.id)?.url, // 替换为真实 URL
-          ...(node.type === "video"
+          ...(node.type === "video" || node.type === "attachment"
             ? { storageFileName: urlMap.get(node.attrs.id)?.fileName }
             : {}),
+          ...(node.type === "attachment"
+            ? { mimeType: node.attrs.mimeType, fileSize: node.attrs.fileSize }
+            : {}),
           isLocalFile: false, // 标记为已上传
-          originalFile: node.type === "video" ? null : undefined,
+          originalFile: node.type === "video" || node.type === "attachment" ? null : undefined,
         },
       };
     }

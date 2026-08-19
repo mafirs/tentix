@@ -13,6 +13,13 @@ import { getConnInfo } from "hono/bun";
 import { HTTPException } from "hono/http-exception";
 import { authMiddleware, factory, AuthEnv } from "tentix-server/api/middleware";
 import { rateLimiter } from "hono-rate-limiter";
+import { isGenericAttachmentMimeType } from "@/utils/file-constants.ts";
+import {
+  FileValidationError,
+  FileValidationUnavailableError,
+  validateGenericAttachmentRequest,
+  validateUploadedGenericFile,
+} from "@/utils/file-validation.ts";
 
 // 为customer用户创建限流器（只创建一次）
 const customerRateLimiter = rateLimiter({
@@ -63,8 +70,8 @@ const fileRouter = factory
     async (c) => {
       const { fileName, downloadName } = c.req.valid("query");
       const stat = await getFileStat(fileName);
-      if (stat.type !== "video/mp4") {
-        throw new HTTPException(404, { message: "Video file not found" });
+      if (stat.type !== "video/mp4" && !isGenericAttachmentMimeType(stat.type)) {
+        throw new HTTPException(404, { message: "File not found" });
       }
       const file = getFileForDownload(fileName);
       return c.body(file.stream(), 200, {
@@ -97,6 +104,18 @@ const fileRouter = factory
     ),
     async (c) => {
       const { fileName, fileType, fileSize } = c.req.valid("query");
+      if (isGenericAttachmentMimeType(fileType)) {
+        try {
+          validateGenericAttachmentRequest(fileName, fileType, fileSize);
+        } catch (error) {
+          if (error instanceof FileValidationError) {
+            throw new HTTPException(422, { message: error.message });
+          }
+          throw error;
+        }
+      } else if (!fileType.startsWith("image/") && fileType !== "video/mp4") {
+        throw new HTTPException(415, { message: "Unsupported file type" });
+      }
       if (
         fileType === "video/mp4" &&
         fileSize !== undefined &&
@@ -121,24 +140,44 @@ const fileRouter = factory
     "/verify",
     describeRoute({
       tags: ["File"],
-      description: "Verify an uploaded video object",
+      description: "Verify an uploaded file object",
       security: [{ bearerAuth: [] }],
     }),
     zValidator(
       "query",
       z.object({
         fileName: z.string(),
-        fileType: z.literal("video/mp4"),
+        originalFileName: z.string().min(1).optional(),
+        fileType: z.string(),
         fileSize: z.coerce.number().int().positive(),
       }),
     ),
     async (c) => {
-      const { fileName, fileSize } = c.req.valid("query");
-      const stat = await getFileStat(fileName);
-      if (stat.size !== fileSize || stat.type !== "video/mp4") {
-        throw new HTTPException(422, {
-          message: "Uploaded video failed verification",
-        });
+      const { fileName, originalFileName, fileType, fileSize } = c.req.valid("query");
+      if (fileType === "video/mp4") {
+        const stat = await getFileStat(fileName);
+        if (stat.size !== fileSize || stat.type !== "video/mp4") {
+          throw new HTTPException(422, { message: "Uploaded video failed verification" });
+        }
+      } else if (isGenericAttachmentMimeType(fileType)) {
+        try {
+          await validateUploadedGenericFile({
+            storageFileName: fileName,
+            fileName: originalFileName ?? "",
+            fileType,
+            fileSize,
+          });
+        } catch (error) {
+          if (error instanceof FileValidationError) {
+            throw new HTTPException(422, { message: error.message });
+          }
+          if (error instanceof FileValidationUnavailableError) {
+            throw new HTTPException(503, { message: error.message });
+          }
+          throw error;
+        }
+      } else {
+        throw new HTTPException(422, { message: "Unsupported file type" });
       }
       return c.json({ valid: true });
     },

@@ -269,6 +269,31 @@ export const RenderContent = ({
     );
   }
 
+  if (content.type === "attachment") {
+    const fileName = String(content.attrs?.fileName || "attachment");
+    const storageFileName = String(content.attrs?.storageFileName || "");
+    if (!storageFileName) {
+      return <span>{fileName}</span>;
+    }
+    const downloadUrl = new URL("/api/file/download", window.location.origin);
+    downloadUrl.searchParams.set("fileName", storageFileName);
+    downloadUrl.searchParams.set("downloadName", fileName);
+    return (
+      <div className="content-attachment-container">
+        <a
+          className="content-attachment-download"
+          href={downloadUrl.toString()}
+          download={fileName}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <DownloadIcon className="size-4" />
+          {fileName}
+        </a>
+      </div>
+    );
+  }
+
   if (content.type === "text") {
     let textNode: ReactNode = content.text || "";
 

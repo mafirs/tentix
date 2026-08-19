@@ -221,7 +221,7 @@ export function NewTestTicket({
         <div className="p-3 bg-muted rounded-lg">
           <div className="text-sm text-muted-foreground">
             {uploadProgress.phase === "checking"
-              ? t("checking_video")
+              ? t("checking_file")
               : t("uploading")}
           </div>
           <div className="mt-2 h-2 bg-background rounded-full overflow-hidden">

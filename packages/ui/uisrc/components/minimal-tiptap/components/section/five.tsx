@@ -13,6 +13,7 @@ import {
 import { LinkEditPopover } from "../link/link-edit-popover.tsx"
 import { ImageEditDialog } from "../image/image-edit-dialog.tsx"
 import { VideoEditDialog } from "../video/video-edit-dialog.tsx"
+import { AttachmentEditDialog } from "../attachment/attachment-edit-dialog.tsx";
 import { ToolbarSection } from "../toolbar-section.tsx"
 
 type InsertElementAction = "codeBlock" | "blockquote" | "horizontalRule"
@@ -71,6 +72,7 @@ export const SectionFive: React.FC<SectionFiveProps> = ({
       <LinkEditPopover editor={editor} size={size} variant={variant} />
       <ImageEditDialog editor={editor} size={size} variant={variant} />
       <VideoEditDialog editor={editor} size={size} variant={variant} />
+      <AttachmentEditDialog editor={editor} size={size} variant={variant} />
       <ToolbarSection
         editor={editor}
         actions={formatActions}

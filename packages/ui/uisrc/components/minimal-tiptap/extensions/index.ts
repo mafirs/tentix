@@ -7,4 +7,5 @@ export * from "./link/index.ts";
 export * from "./selection/index.ts";
 export * from "./unset-all-marks/index.ts";
 export * from "./file-handler/index.ts";
+export * from "./attachment/index.ts";
 export * from "./shortcut/index.ts";

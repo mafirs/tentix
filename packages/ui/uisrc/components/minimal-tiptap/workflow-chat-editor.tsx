@@ -6,6 +6,7 @@ import { LinkBubbleMenu } from "./components/bubble-menu/link-bubble-menu.tsx";
 import { MeasuredContainer } from "./components/measured-container.tsx";
 import { SectionTwo } from "./components/section/two.tsx";
 import { VideoEditDialog } from "./components/video/video-edit-dialog.tsx";
+import { AttachmentEditDialog } from "./components/attachment/attachment-edit-dialog.tsx";
 import { useMinimalTiptapEditor } from "./hooks/use-minimal-tiptap.ts";
 import { cleanupBlobUrls } from "./utils.ts";
 import type { MinimalTiptapProps } from "./minimal-tiptap.tsx";
@@ -25,6 +26,7 @@ const Toolbar = ({ editor }: { editor: Editor }) => (
         mainActionCount={4}
       />
       <VideoEditDialog editor={editor} />
+      <AttachmentEditDialog editor={editor} />
     </div>
   </div>
 );

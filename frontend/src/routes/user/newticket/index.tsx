@@ -442,7 +442,7 @@ function RouteComponent() {
                     <div>{t("are_you_sure_submit_ticket")}</div>
                     <div className="text-sm text-zinc-600">
                       {uploadProgress.phase === "checking"
-                        ? t("checking_video")
+                        ? t("checking_file")
                         : t("uploading")}
                     </div>
                   </div>

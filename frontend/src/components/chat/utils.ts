@@ -59,7 +59,7 @@ export const hasNodeContent = (
   }
 
   // 图片和媒体文件：直接算作有内容
-  if (n.type === "image" || n.type === "video") {
+  if (n.type === "image" || n.type === "video" || n.type === "attachment") {
     return true;
   }
 
@@ -83,7 +83,7 @@ export const isLocalFileNode = (
   if (!node || typeof node !== "object") return false;
   const n = node as { type?: string; attrs?: { isLocalFile?: boolean } };
   return (
-    (n.type === "image" || n.type === "video") &&
+    (n.type === "image" || n.type === "video" || n.type === "attachment") &&
     n.attrs?.isLocalFile === true
   );
 };

@@ -246,7 +246,9 @@ export const cleanupBlobUrls = (editor: Editor | null, beforeClear = false) => {
     // 收集需要清理的 blob URLs
     editor.state.doc.descendants((node) => {
       if (
-        (node.type.name === "image" || node.type.name === "video") &&
+        (node.type.name === "image" ||
+          node.type.name === "video" ||
+          node.type.name === "attachment") &&
         node.attrs.src?.startsWith("blob:") &&
         node.attrs.isLocalFile
       ) {

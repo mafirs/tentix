@@ -1,7 +1,7 @@
 /* eslint-disable drizzle/enforce-delete-with-where */
 import { S3Error } from "@/api/middleware.ts";
 import { S3Client } from "bun";
-
+import { isGenericAttachmentMimeType } from "./file-constants.ts";
 
 const bucket = new S3Client({
   accessKeyId: global.customEnv.MINIO_ACCESS_KEY,
@@ -13,7 +13,7 @@ const bucket = new S3Client({
 export async function getPresignedUrl(fileName: string, fileType: string): Promise<{ url: string; fileName: string }> {
   try {
     // For videos, use an opaque random key; keep existing naming for other files
-    const newFileName = fileType === "video/mp4"
+    const newFileName = fileType === "video/mp4" || isGenericAttachmentMimeType(fileType)
       ? crypto.randomUUID()
       : fileName.startsWith('avatar/') 
         ? fileName 

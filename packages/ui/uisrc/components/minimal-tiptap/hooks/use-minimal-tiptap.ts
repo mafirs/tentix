@@ -20,6 +20,10 @@ import {
   Color,
   UnsetAllMarks,
   FileHandler,
+  Attachment,
+  ATTACHMENT_MIME_TYPES,
+  ATTACHMENT_MAX_SIZE,
+  isGenericAttachmentMimeType,
   ChatKeyboardExtension,
 } from "../extensions/index.ts";
 import { cn } from "uisrc/lib/utils.ts";
@@ -152,22 +156,39 @@ const createExtensions = (
       });
     },
   }),
+  Attachment.configure({
+    allowedMimeTypes: [...ATTACHMENT_MIME_TYPES],
+    maxFileSize: ATTACHMENT_MAX_SIZE,
+    onValidationError: (errors) => toast({
+      title: "文件验证错误",
+      description: errors.map(getFileUploadErrorMessage).join(", "),
+      variant: "destructive",
+    }),
+    onLimitError: (message) => toast({
+      title: "附件数量或大小超限",
+      description: message,
+      variant: "destructive",
+    }),
+  }),
 
   // 🎯 优化的文件处理器
   FileHandler.configure({
     allowBase64: false,
     allowedMimeTypes: [
       "image/*",
-      "application/*",
-      "text/*",
-      "audio/*",
+      ...ATTACHMENT_MIME_TYPES,
       "video/mp4",
     ],
     maxFileSize: (mimeType) =>
-      mimeType === "video/mp4" ? 50 * 1024 * 1024 : 5 * 1024 * 1024,
+      mimeType === "video/mp4"
+        ? 50 * 1024 * 1024
+        : isGenericAttachmentMimeType(mimeType)
+          ? ATTACHMENT_MAX_SIZE
+          : 5 * 1024 * 1024,
     onDrop: (editor, files, pos) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));
       const videoFiles = files.filter((file) => file.type === "video/mp4");
+      const attachmentFiles = files.filter((file) => isGenericAttachmentMimeType(file.type));
 
       imageFiles.forEach((file) => {
         const blobUrl = URL.createObjectURL(file);
@@ -203,13 +224,17 @@ const createExtensions = (
           { type: "paragraph" },
         ]);
       }
+      if (attachmentFiles.length > 0) {
+        editor.commands.setAttachments(attachmentFiles, pos ?? 0);
+      }
     },
     onPaste: (editor, files, pasteSlice) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));
       const videoFiles = files.filter((file) => file.type === "video/mp4");
+      const attachmentFiles = files.filter((file) => isGenericAttachmentMimeType(file.type));
       const mediaFiles = [...imageFiles, ...videoFiles];
 
-      if (mediaFiles.length === 0) {
+      if (mediaFiles.length === 0 && attachmentFiles.length === 0) {
         return false;
       }
 
@@ -237,6 +262,9 @@ const createExtensions = (
       );
 
       editor.commands.insertContent([...pastedContent, { type: "paragraph" }]);
+      if (attachmentFiles.length > 0) {
+        editor.commands.setAttachments(attachmentFiles);
+      }
       return true;
     },
     onValidationError: (errors) => {
