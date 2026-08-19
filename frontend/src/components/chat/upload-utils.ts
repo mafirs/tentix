@@ -190,8 +190,14 @@ const verifyUploadedGenericFile = async (
     const body = (await response.json().catch(() => null)) as {
       message?: unknown;
     } | null;
+    const isLogContentError =
+      file.name.toLowerCase().endsWith(".log") &&
+      response.status === 422 &&
+      body?.message === "Uploaded attachment content is invalid";
     const message =
-      typeof body?.message === "string"
+      isLogContentError
+        ? "日志文件需要使用 UTF-8 编码，请转换后重试"
+        : typeof body?.message === "string"
         ? body.message
         : response.status === 503
           ? "File verification is temporarily unavailable"

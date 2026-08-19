@@ -25,6 +25,7 @@ import {
   ATTACHMENT_MIME_TYPES,
   ATTACHMENT_MAX_SIZE,
   isGenericAttachmentMimeType,
+  normalizeGenericAttachmentFile,
   ChatKeyboardExtension,
 } from "../extensions/index.ts";
 import { cn } from "uisrc/lib/utils.ts";
@@ -175,6 +176,7 @@ const createExtensions = (
   // 🎯 优化的文件处理器
   FileHandler.configure({
     allowBase64: false,
+    normalizeFile: normalizeGenericAttachmentFile,
     allowedMimeTypes: [
       "image/*",
       ...ATTACHMENT_MIME_TYPES,

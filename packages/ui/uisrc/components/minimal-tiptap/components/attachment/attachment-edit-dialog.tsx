@@ -30,7 +30,7 @@ export const AttachmentEditDialog = ({
       <input
         ref={inputRef}
         type="file"
-        accept={`${ATTACHMENT_ACCEPT},video/mp4`}
+        accept={`image/*,${ATTACHMENT_ACCEPT},video/mp4`}
         multiple
         className="hidden"
         onChange={(event) => {

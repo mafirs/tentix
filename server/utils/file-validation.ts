@@ -132,6 +132,11 @@ function matchesDeclaredFormat(
       return parseSafeXml(bytes);
     case "txt":
     case "csv":
+    case "md":
+    case "yaml":
+    case "yml":
+    case "toml":
+    case "log":
       return isUtf8Text(bytes);
     case "docx":
       return isOfficePackage(bytes, "word/document.xml");

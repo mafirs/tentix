@@ -11,6 +11,11 @@ export const GENERIC_ATTACHMENT_MIME_TYPES = {
   txt: ["text/plain"],
   json: ["application/json"],
   xml: ["application/xml", "text/xml"],
+  md: ["text/markdown", "text/x-markdown", "text/plain"],
+  yaml: ["application/yaml", "application/x-yaml", "text/yaml", "text/x-yaml", "text/plain"],
+  yml: ["application/yaml", "application/x-yaml", "text/yaml", "text/x-yaml", "text/plain"],
+  toml: ["application/toml", "text/toml", "text/x-toml", "text/plain"],
+  log: ["text/plain"],
 } as const;
 
 export const GENERIC_ATTACHMENT_MIME_SET: Set<string> = new Set(

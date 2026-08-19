@@ -4,6 +4,30 @@ import { filterFiles, randomId, type FileError, type FileValidationOptions } fro
 import { AttachmentViewBlock } from "./components/attachment-view-block.tsx";
 import { VIDEO_MAX_SIZE } from "../video/video.ts";
 
+const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  csv: "text/csv",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  txt: "text/plain",
+  json: "application/json",
+  xml: "application/xml",
+  md: "text/markdown",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  toml: "application/toml",
+  log: "text/plain",
+};
+
+export function normalizeGenericAttachmentFile(file: File): File {
+  if (file.type) return file;
+  const extension = file.name.toLowerCase().split(".").pop() ?? "";
+  const mimeType = ATTACHMENT_MIME_BY_EXTENSION[extension];
+  if (!mimeType) return file;
+  return new File([file], file.name, { type: mimeType, lastModified: file.lastModified });
+}
+
 export const ATTACHMENT_MIME_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -15,8 +39,17 @@ export const ATTACHMENT_MIME_TYPES = [
   "application/json",
   "application/xml",
   "text/xml",
+  "text/markdown",
+  "text/x-markdown",
+  "application/yaml",
+  "application/x-yaml",
+  "text/yaml",
+  "text/x-yaml",
+  "application/toml",
+  "text/toml",
+  "text/x-toml",
 ] as const;
-export const ATTACHMENT_ACCEPT = ".pdf,.docx,.xlsx,.csv,.pptx,.txt,.json,.xml";
+export const ATTACHMENT_ACCEPT = ".pdf,.docx,.xlsx,.csv,.pptx,.txt,.json,.xml,.md,.yaml,.yml,.toml,.log";
 export const ATTACHMENT_MAX_SIZE = 25 * 1024 * 1024;
 export const ATTACHMENT_MAX_COUNT = 5;
 export const ATTACHMENT_MAX_TOTAL_SIZE = 50 * 1024 * 1024;
@@ -62,7 +95,8 @@ export const Attachment = Node.create<AttachmentOptions>({
   addCommands() {
     return {
       setAttachments: (files, position) => ({ editor, commands }) => {
-        const [validFiles, errors] = filterFiles(files, {
+        const normalizedFiles = files.map(normalizeGenericAttachmentFile);
+        const [validFiles, errors] = filterFiles(normalizedFiles, {
           allowedMimeTypes: this.options.allowedMimeTypes,
           maxFileSize: this.options.maxFileSize,
           allowBase64: false,
@@ -104,14 +138,17 @@ export const Attachment = Node.create<AttachmentOptions>({
       },
       setUploadFiles: (files) => ({ commands }) => {
         const attachmentMaxFileSize = this.options.maxFileSize;
-        const [validFiles, errors] = filterFiles(files, {
-          allowedMimeTypes: [...this.options.allowedMimeTypes, "video/mp4"],
+        const normalizedFiles = files.map(normalizeGenericAttachmentFile);
+        const [validFiles, errors] = filterFiles(normalizedFiles, {
+          allowedMimeTypes: ["image/*", ...this.options.allowedMimeTypes, "video/mp4"],
           maxFileSize: (mimeType) =>
             mimeType === "video/mp4"
               ? VIDEO_MAX_SIZE
-              : typeof attachmentMaxFileSize === "function"
-                ? attachmentMaxFileSize(mimeType)
-                : attachmentMaxFileSize,
+              : mimeType.startsWith("image/")
+                ? 5 * 1024 * 1024
+                : typeof attachmentMaxFileSize === "function"
+                  ? attachmentMaxFileSize(mimeType)
+                  : attachmentMaxFileSize,
           allowBase64: false,
         });
 
@@ -121,6 +158,7 @@ export const Attachment = Node.create<AttachmentOptions>({
 
         if (validFiles.length === 0) return false;
 
+        const imageFiles = validFiles.filter((file) => file.type.startsWith("image/"));
         const videoFiles = validFiles.filter(
           (file) => file.type === "video/mp4",
         );
@@ -129,6 +167,9 @@ export const Attachment = Node.create<AttachmentOptions>({
         );
         let didInsert = false;
 
+        if (imageFiles.length > 0) {
+          didInsert = commands.setImages(imageFiles) || didInsert;
+        }
         if (videoFiles.length > 0) {
           didInsert = commands.setVideos(videoFiles) || didInsert;
         }
