@@ -1,4 +1,5 @@
 export const GENERIC_ATTACHMENT_MAX_SIZE = 25 * 1024 * 1024;
+export const ZIP_ATTACHMENT_MAX_SIZE = 50 * 1024 * 1024;
 export const GENERIC_ATTACHMENT_MAX_COUNT = 5;
 export const GENERIC_ATTACHMENT_MAX_TOTAL_SIZE = 50 * 1024 * 1024;
 
@@ -6,6 +7,7 @@ export const GENERIC_ATTACHMENT_MIME_TYPES = {
   pdf: ["application/pdf"],
   docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
   xlsx: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  zip: ["application/zip", "application/x-zip-compressed"],
   csv: ["text/csv", "application/vnd.ms-excel"],
   pptx: ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
   txt: ["text/plain"],
@@ -25,6 +27,12 @@ export const GENERIC_ATTACHMENT_MIME_SET: Set<string> = new Set(
 export function getGenericAttachmentExtension(fileName: string): string | null {
   const extension = fileName.toLowerCase().split(".").pop();
   return extension && extension in GENERIC_ATTACHMENT_MIME_TYPES ? extension : null;
+}
+
+export function getGenericAttachmentMaxSize(fileName: string): number {
+  return getGenericAttachmentExtension(fileName) === "zip"
+    ? ZIP_ATTACHMENT_MAX_SIZE
+    : GENERIC_ATTACHMENT_MAX_SIZE;
 }
 
 export function isGenericAttachmentMimeType(fileType: string): boolean {

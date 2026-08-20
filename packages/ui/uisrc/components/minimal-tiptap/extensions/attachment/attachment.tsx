@@ -8,6 +8,7 @@ const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  zip: "application/zip",
   csv: "text/csv",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   txt: "text/plain",
@@ -32,6 +33,8 @@ export const ATTACHMENT_MIME_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/zip",
+  "application/x-zip-compressed",
   "text/csv",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -49,10 +52,16 @@ export const ATTACHMENT_MIME_TYPES = [
   "text/toml",
   "text/x-toml",
 ] as const;
-export const ATTACHMENT_ACCEPT = ".pdf,.docx,.xlsx,.csv,.pptx,.txt,.json,.xml,.md,.yaml,.yml,.toml,.log";
+export const ATTACHMENT_ACCEPT = ".pdf,.docx,.xlsx,.csv,.pptx,.txt,.json,.xml,.md,.yaml,.yml,.toml,.log,.zip";
 export const ATTACHMENT_MAX_SIZE = 25 * 1024 * 1024;
+export const ZIP_ATTACHMENT_MAX_SIZE = 50 * 1024 * 1024;
 export const ATTACHMENT_MAX_COUNT = 5;
 export const ATTACHMENT_MAX_TOTAL_SIZE = 50 * 1024 * 1024;
+
+export const getAttachmentMaxSize = (mimeType: string): number =>
+  mimeType === "application/zip" || mimeType === "application/x-zip-compressed"
+    ? ZIP_ATTACHMENT_MAX_SIZE
+    : ATTACHMENT_MAX_SIZE;
 
 export function isGenericAttachmentMimeType(fileType: string): boolean {
   return (ATTACHMENT_MIME_TYPES as readonly string[]).includes(fileType);
@@ -80,7 +89,7 @@ export const Attachment = Node.create<AttachmentOptions>({
   selectable: true,
   addOptions: () => ({
     allowedMimeTypes: [...ATTACHMENT_MIME_TYPES],
-    maxFileSize: ATTACHMENT_MAX_SIZE,
+    maxFileSize: getAttachmentMaxSize,
   }),
   addAttributes: () => ({
     src: { default: null, rendered: false },

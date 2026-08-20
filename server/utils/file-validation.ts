@@ -6,6 +6,7 @@ import {
   GENERIC_ATTACHMENT_MAX_SIZE,
   GENERIC_ATTACHMENT_MAX_TOTAL_SIZE,
   getGenericAttachmentExtension,
+  getGenericAttachmentMaxSize,
   isGenericAttachmentPair,
 } from "./file-constants.ts";
 import { getFileForDownload, getFileStat } from "./minio.ts";
@@ -41,9 +42,13 @@ export function validateGenericAttachmentRequest(
     fileSize === undefined ||
     !Number.isSafeInteger(fileSize) ||
     fileSize < 0 ||
-    fileSize > GENERIC_ATTACHMENT_MAX_SIZE
+    fileSize > getGenericAttachmentMaxSize(fileName)
   ) {
-    throw new FileValidationError("Attachment file must not exceed 25 MB");
+    throw new FileValidationError(
+      getGenericAttachmentExtension(fileName) === "zip"
+        ? "ZIP file must not exceed 50 MB"
+        : "Attachment file must not exceed 25 MB",
+    );
   }
 }
 
@@ -60,6 +65,8 @@ export async function validateUploadedGenericFile(input: {
   if (stat.size !== input.fileSize || stat.type !== input.fileType) {
     throw new FileValidationError("Uploaded attachment metadata is invalid");
   }
+  const extension = getGenericAttachmentExtension(input.fileName);
+  if (extension === "zip") return;
 
   let bytes: Uint8Array;
   try {
@@ -69,7 +76,6 @@ export async function validateUploadedGenericFile(input: {
   } catch {
     throw new FileValidationUnavailableError();
   }
-  const extension = getGenericAttachmentExtension(input.fileName);
   if (!extension || !matchesDeclaredFormat(extension, bytes)) {
     throw new FileValidationError("Uploaded attachment content is invalid");
   }

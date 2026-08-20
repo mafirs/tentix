@@ -23,7 +23,7 @@ import {
   FileHandler,
   Attachment,
   ATTACHMENT_MIME_TYPES,
-  ATTACHMENT_MAX_SIZE,
+  getAttachmentMaxSize,
   isGenericAttachmentMimeType,
   normalizeGenericAttachmentFile,
   ChatKeyboardExtension,
@@ -160,7 +160,7 @@ const createExtensions = (
   }),
   Attachment.configure({
     allowedMimeTypes: [...ATTACHMENT_MIME_TYPES],
-    maxFileSize: ATTACHMENT_MAX_SIZE,
+    maxFileSize: getAttachmentMaxSize,
     onValidationError: (errors) => toast({
       title: "文件验证错误",
       description: errors.map(getFileUploadErrorMessage).join(", "),
@@ -186,7 +186,7 @@ const createExtensions = (
       mimeType === "video/mp4"
         ? VIDEO_MAX_SIZE
         : isGenericAttachmentMimeType(mimeType)
-          ? ATTACHMENT_MAX_SIZE
+          ? getAttachmentMaxSize(mimeType)
           : 5 * 1024 * 1024,
     onDrop: (editor, files, pos) => {
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));

@@ -3,7 +3,7 @@
 import { type JSONContentZod } from "tentix-server/types";
 import { waitForSealosAuthReady } from "../../_provider/sealos";
 import {
-  ATTACHMENT_MAX_SIZE,
+  getAttachmentMaxSize,
   isGenericAttachmentMimeType,
 } from "tentix-ui";
 
@@ -34,7 +34,6 @@ class UploadError extends Error {
 }
 
 const VIDEO_FILE_SIZE_LIMIT = 52_428_800;
-const GENERIC_FILE_SIZE_LIMIT = ATTACHMENT_MAX_SIZE;
 const VIDEO_CHECK_NO_PROGRESS_TIMEOUT = 60_000;
 
 export type UploadPhase = "uploading" | "checking";
@@ -66,8 +65,13 @@ const uploadFile = async (
     if (file.type === "video/mp4" && file.size > VIDEO_FILE_SIZE_LIMIT) {
       throw new UploadError("Video file must not exceed 50 MB", file.name);
     }
-    if (isGenericAttachmentMimeType(file.type) && file.size > GENERIC_FILE_SIZE_LIMIT) {
-      throw new UploadError("Attachment file must not exceed 25 MB", file.name);
+    if (isGenericAttachmentMimeType(file.type) && file.size > getAttachmentMaxSize(file.type)) {
+      throw new UploadError(
+        file.type === "application/zip" || file.type === "application/x-zip-compressed"
+          ? "ZIP file must not exceed 50 MB"
+          : "Attachment file must not exceed 25 MB",
+        file.name,
+      );
     }
     const presignedUrl = new URL(
       "/api/file/presigned-url",
