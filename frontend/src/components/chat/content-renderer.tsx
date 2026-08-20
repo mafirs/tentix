@@ -1,6 +1,6 @@
 import { type ReactNode, useMemo } from "react";
 import { type JSONContent } from "@tiptap/react";
-import { DownloadIcon } from "lucide-react";
+import { DownloadIcon, FileTextIcon } from "lucide-react";
 import { PhotoProvider, PhotoView } from "react-photo-view";
 import "react-photo-view/dist/react-photo-view.css";
 import hljs from "highlight.js/lib/core";
@@ -56,6 +56,20 @@ const CodeBlock = ({
       />
     </pre>
   );
+};
+
+const getAttachmentTypeLabel = (fileName: string): string => {
+  const extension = fileName.split(".").pop()?.trim().toUpperCase();
+  return extension && extension !== fileName.toUpperCase() ? extension : "FILE";
+};
+
+const formatAttachmentSize = (value: unknown): string | null => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
 
 export const RenderContent = ({
@@ -272,24 +286,44 @@ export const RenderContent = ({
   if (content.type === "attachment") {
     const fileName = String(content.attrs?.fileName || "attachment");
     const storageFileName = String(content.attrs?.storageFileName || "");
-    if (!storageFileName) {
-      return <span>{fileName}</span>;
+    const typeLabel = getAttachmentTypeLabel(fileName);
+    const sizeLabel = formatAttachmentSize(content.attrs?.fileSize);
+    const metadata = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
+    const downloadUrl = storageFileName
+      ? new URL("/api/file/download", window.location.origin)
+      : null;
+    if (downloadUrl) {
+      downloadUrl.searchParams.set("fileName", storageFileName);
+      downloadUrl.searchParams.set("downloadName", fileName);
     }
-    const downloadUrl = new URL("/api/file/download", window.location.origin);
-    downloadUrl.searchParams.set("fileName", storageFileName);
-    downloadUrl.searchParams.set("downloadName", fileName);
     return (
       <div className="content-attachment-container">
-        <a
-          className="content-attachment-download"
-          href={downloadUrl.toString()}
-          download={fileName}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <DownloadIcon className="size-4" />
-          {fileName}
-        </a>
+        <div className="content-attachment-info">
+          <div className="content-attachment-icon" aria-hidden="true">
+            <FileTextIcon className="size-5" />
+          </div>
+          <div className="content-attachment-text">
+            <span className="content-attachment-name" title={fileName}>
+              {fileName}
+            </span>
+            {metadata && (
+              <span className="content-attachment-meta">{metadata}</span>
+            )}
+          </div>
+        </div>
+        {downloadUrl && (
+          <a
+            className="content-attachment-download"
+            href={downloadUrl.toString()}
+            download={fileName}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`下载 ${fileName}`}
+            title={`下载 ${fileName}`}
+          >
+            <DownloadIcon className="size-4" />
+          </a>
+        )}
       </div>
     );
   }
