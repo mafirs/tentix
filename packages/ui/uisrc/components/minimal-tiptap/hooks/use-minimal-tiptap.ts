@@ -193,23 +193,25 @@ const createExtensions = (
       const videoFiles = files.filter((file) => file.type === "video/mp4");
       const attachmentFiles = files.filter((file) => isGenericAttachmentMimeType(file.type));
 
-      imageFiles.forEach((file) => {
-        const blobUrl = URL.createObjectURL(file);
-        const id = randomId();
-
-        editor.commands.insertContentAt(pos, {
+      if (imageFiles.length > 0) {
+        const imageNodes = imageFiles.map((file) => ({
           type: "image",
           attrs: {
-            id,
-            src: blobUrl,
+            id: randomId(),
+            src: URL.createObjectURL(file),
             alt: file.name,
             title: file.name,
             fileName: file.name,
             isLocalFile: true,
             originalFile: file,
           },
-        });
-      });
+        }));
+
+        editor.commands.insertContentAt(pos, [
+          ...imageNodes,
+          { type: "paragraph" },
+        ]);
+      }
 
       if (videoFiles.length > 0) {
         editor.commands.insertContentAt(pos, [
