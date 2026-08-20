@@ -31,6 +31,15 @@ import {
 } from "@/utils/kb/kb-builder";
 import { getTextWithImageInfo } from "@/utils/kb/tools";
 import type { JSONContentZod } from "@/utils/types";
+import {
+  KNOWLEDGE_FILE_MAX_BYTES,
+  KNOWLEDGE_FILE_MAX_CANDIDATES,
+  KNOWLEDGE_FILE_MAX_CONTENT_LENGTH,
+  normalizeKnowledgeDuplicateContent,
+  splitKnowledgeFile,
+  KnowledgeFileParseError,
+  type KnowledgeFileCandidate,
+} from "@/utils/kb/file-import.ts";
 
 const createFavoritedSchema = z.object({
   ticketId: z.string(),
@@ -138,6 +147,45 @@ const generateGeneralKnowledgeIndexesSchema = z
       .max(10, "模块数量不能超过 10 个"),
     category: z.enum(generalKnowledgeCategoryValues),
     content: z.string().trim().min(1, "正文不能为空").max(20000),
+  })
+  .strict();
+
+const knowledgeFilePreviewSchema = z
+  .object({
+    fileName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(/\.(?:md|txt)$/i, "仅支持 .md 和 .txt 文件"),
+    fileSizeBytes: z.number().int().positive().max(KNOWLEDGE_FILE_MAX_BYTES),
+    rawText: z.string(),
+    chunkSize: z.number().int().min(200).max(4000),
+    overlapRatio: z.number().min(0).max(0.4),
+    maxChunks: z.number().int().min(1).max(KNOWLEDGE_FILE_MAX_CANDIDATES),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const actualTextBytes = new TextEncoder().encode(value.rawText).byteLength;
+    if (actualTextBytes > KNOWLEDGE_FILE_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rawText"],
+        message: "文件不能超过 10 MB",
+      });
+    }
+  });
+
+const knowledgeFileDuplicateSchema = z
+  .object({
+    candidates: z
+      .array(
+        z.object({
+          candidateId: z.string().min(1).max(80),
+          content: z.string().trim().min(1).max(KNOWLEDGE_FILE_MAX_CONTENT_LENGTH),
+        }),
+      )
+      .max(KNOWLEDGE_FILE_MAX_CANDIDATES),
   })
   .strict();
 
@@ -550,6 +598,93 @@ const kbRouter = factory
   .createApp()
   .use(authMiddleware)
   .use(staffOnlyMiddleware())
+  .post(
+    "/admin/general-knowledge/file/preview",
+    adminOnlyMiddleware(),
+    zValidator("json", knowledgeFilePreviewSchema),
+    async (c) => {
+      const payload = c.req.valid("json");
+      let candidates: KnowledgeFileCandidate[];
+      try {
+        candidates = splitKnowledgeFile(payload.rawText, {
+          chunkSize: payload.chunkSize,
+          overlapRatio: payload.overlapRatio,
+          maxChunks: payload.maxChunks,
+        });
+      } catch (error) {
+        if (error instanceof KnowledgeFileParseError) {
+          throw new HTTPException(422, { message: error.message });
+        }
+        throw error;
+      }
+
+      return c.json({
+        success: true,
+        data: {
+          fileName: payload.fileName,
+          candidates: candidates.map((candidate: KnowledgeFileCandidate) => ({
+            candidateId: crypto.randomUUID(),
+            title: candidate.title,
+            content: candidate.content,
+          })),
+          total: candidates.length,
+        },
+      });
+    },
+  )
+  .post(
+    "/admin/general-knowledge/file/duplicates",
+    adminOnlyMiddleware(),
+    zValidator("json", knowledgeFileDuplicateSchema),
+    async (c) => {
+      const db = c.var.db;
+      const payload = c.req.valid("json");
+      const normalizedCandidates = payload.candidates.map((candidate) => ({
+        ...candidate,
+        normalizedContent: normalizeKnowledgeDuplicateContent(candidate.content),
+      }));
+      const existing = await db
+        .select({
+          sourceId: schema.knowledgeBase.sourceId,
+          title: schema.knowledgeBase.title,
+          content: schema.knowledgeBase.content,
+          metadata: schema.knowledgeBase.metadata,
+        })
+        .from(schema.knowledgeBase)
+        .where(
+          and(
+            eq(schema.knowledgeBase.sourceType, "general_knowledge"),
+            eq(schema.knowledgeBase.chunkId, 0),
+          ),
+        );
+      type ExistingKnowledge = (typeof existing)[number];
+      const existingByContent = new Map<string, ExistingKnowledge[]>();
+      for (const row of existing) {
+        const key = normalizeKnowledgeDuplicateContent(row.content);
+        const rows = existingByContent.get(key) ?? [];
+        rows.push(row);
+        existingByContent.set(key, rows);
+      }
+
+      return c.json({
+        success: true,
+        data: {
+          matches: normalizedCandidates.map((candidate) => ({
+            candidateId: candidate.candidateId,
+            existing: (existingByContent.get(candidate.normalizedContent) ?? []).map((row) => {
+              const metadata = row.metadata as Record<string, unknown>;
+              return {
+                sourceId: row.sourceId,
+                title: row.title,
+                modules: Array.isArray(metadata.modules) ? metadata.modules : [],
+                category: metadata.category ?? "other",
+              };
+            }),
+          })),
+        },
+      });
+    },
+  )
   .post(
     "/favorited",
     describeRoute({
