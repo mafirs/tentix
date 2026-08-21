@@ -24,6 +24,7 @@ import {
   DialogTitle,
   Input,
   Label,
+  Progress,
   Select,
   SelectContent,
   SelectItem,
@@ -55,6 +56,11 @@ type FileImportCandidate = KnowledgeFieldValues & {
   indexStatus: "idle" | "running" | "success" | "failed";
   importStatus: "pending" | "running" | "success" | "failed" | "skipped";
   error?: string;
+};
+
+type ImportProgress = {
+  total: number;
+  completed: number;
 };
 
 function getResponseMessage(data: unknown, fallback: string): string {
@@ -179,6 +185,8 @@ export function FileImportDialog({
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] =
+    useState<ImportProgress | null>(null);
 
   const selectedCandidate =
     candidates.find((item) => item.candidateId === selectedCandidateId) ??
@@ -220,6 +228,7 @@ export function FileImportDialog({
       setCandidates([]);
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
+      setImportProgress(null);
       setIsReadingFile(false);
       return;
     }
@@ -232,6 +241,7 @@ export function FileImportDialog({
       setCandidates([]);
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
+      setImportProgress(null);
       setIsReadingFile(false);
       return;
     }
@@ -245,6 +255,7 @@ export function FileImportDialog({
     setCandidates([]);
     setSelectedCandidateIds([]);
     setSelectedCandidateId("");
+    setImportProgress(null);
 
     try {
       const fingerprint = await getFileFingerprint(nextFile);
@@ -308,6 +319,7 @@ export function FileImportDialog({
       }
     }
 
+    setImportProgress(null);
     setIsParsing(true);
     setErrorMessage("");
     try {
@@ -512,6 +524,7 @@ export function FileImportDialog({
   };
 
   const handleImport = async (requestedCandidates?: FileImportCandidate[]) => {
+    const isRetry = requestedCandidates !== undefined;
     const selected = requestedCandidates ?? candidates.filter((candidate) =>
       getSelectedIds().includes(candidate.candidateId),
     );
@@ -528,6 +541,25 @@ export function FileImportDialog({
           !(item.candidate.duplicateAction === "skip" && item.candidate.duplicate !== "none"),
       )
       .map((item) => item.candidate);
+    if (!isRetry) {
+      const alreadyCompletedCount = selected.filter(
+        (candidate) =>
+          candidate.importStatus === "success" ||
+          candidate.importStatus === "skipped",
+      ).length;
+      const newlySkippedCount = validation.filter(
+        (item) =>
+          !item.errors &&
+          item.candidate.importStatus !== "success" &&
+          item.candidate.importStatus !== "skipped" &&
+          item.candidate.duplicateAction === "skip" &&
+          item.candidate.duplicate !== "none",
+      ).length;
+      setImportProgress({
+        total: selected.length,
+        completed: alreadyCompletedCount + newlySkippedCount,
+      });
+    }
     setCandidates((current) =>
       current.map((candidate) => {
         const itemValidation = validation.find(
@@ -563,6 +595,16 @@ export function FileImportDialog({
               : item,
           ),
         );
+        if (!isRetry) {
+          setImportProgress((current) =>
+            current
+              ? {
+                  ...current,
+                  completed: Math.min(current.completed + 1, current.total),
+                }
+              : current,
+          );
+        }
       } catch (error) {
         setCandidates((current) =>
           current.map((item) =>
@@ -575,6 +617,16 @@ export function FileImportDialog({
               : item,
           ),
         );
+        if (!isRetry) {
+          setImportProgress((current) =>
+            current
+              ? {
+                  ...current,
+                  completed: Math.min(current.completed + 1, current.total),
+                }
+              : current,
+          );
+        }
       }
     });
     setIsImporting(false);
@@ -619,6 +671,13 @@ export function FileImportDialog({
   ).length;
   const successCount = candidates.filter((candidate) => candidate.importStatus === "success").length;
   const failedCount = candidates.filter((candidate) => candidate.importStatus === "failed").length;
+  const importProgressValue =
+    importProgress && importProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round((importProgress.completed / importProgress.total) * 100),
+        )
+      : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -650,11 +709,14 @@ export function FileImportDialog({
                 type="button"
                 className={`border-t-2 px-1 pt-2 text-left text-xs ${activeStep === step ? "border-primary text-foreground" : "border-border text-muted-foreground"}`}
                 onClick={() => {
+                  if (step === "confirm") {
+                    if (candidates.length) goToConfirm();
+                    return;
+                  }
                   if (
                     step === "file" ||
                     (step === "settings" && file) ||
-                    (step === "preview" && candidates.length) ||
-                    (step === "confirm" && candidates.length)
+                    (step === "preview" && candidates.length)
                   ) {
                     setActiveStep(step);
                   }
@@ -993,6 +1055,21 @@ export function FileImportDialog({
                   <div><dt className="text-muted-foreground">索引状态</dt><dd className="mt-1">已生成 {candidates.filter((candidate) => candidate.indexStatus === "success").length} 条，未生成也可以导入</dd></div>
                   <div><dt className="text-muted-foreground">失败状态</dt><dd className="mt-1">{failedCount ? `${failedCount} 条失败，可返回重试` : "没有失败项"}</dd></div>
                 </dl>
+                {importProgress ? (
+                  <div className="mt-4 grid gap-2">
+                    <div className="flex justify-between text-sm">
+                      <span>{isImporting ? "导入中" : "处理完成"}</span>
+                      <span>
+                        {importProgress.completed} / {importProgress.total}
+                      </span>
+                    </div>
+                    <Progress
+                      value={importProgressValue}
+                      aria-label="导入进度"
+                      className="h-2"
+                    />
+                  </div>
+                ) : null}
               </div>
               <div className="flex justify-between gap-3">
                 <Button type="button" variant="outline" disabled={isImporting} onClick={() => setActiveStep("preview")}>返回审核</Button>
