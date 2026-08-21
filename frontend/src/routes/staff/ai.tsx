@@ -1645,32 +1645,34 @@ function KnowledgeBaseTab() {
         </div>
 
         <Dialog open={createDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
-          <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
-            <DialogHeader>
+          <DialogContent className="grid-rows-[auto_minmax(0,1fr)_auto] h-[min(860px,calc(100vh-2rem))] w-[min(1080px,calc(100vw-2rem))] sm:max-w-[1080px] overflow-hidden p-0">
+            <DialogHeader className="border-b border-border px-6 py-5">
               <DialogTitle>添加通用知识</DialogTitle>
             </DialogHeader>
             <Form {...createKnowledgeForm}>
               <form
-                className="space-y-5"
+                className="flex min-h-0 flex-1 flex-col"
                 onSubmit={createKnowledgeForm.handleSubmit(handleCreateGeneralKnowledge)}
               >
-                <KnowledgeFieldsEditor
-                  value={knowledgeFieldValues}
-                  moduleOptions={moduleOptions}
-                  errors={knowledgeFieldErrors}
-                  onChange={handleKnowledgeFieldChange}
-                  showRevision
-                  showIndexFields
-                  showIndexGenerationControls
-                  autoGenerateIndexes={autoGenerateIndexes}
-                  onAutoGenerateIndexesChange={setAutoGenerateIndexes}
-                  onGenerateIndexes={handleGenerateGeneralKnowledgeIndexes}
-                  indexGenerationPending={
-                    generateGeneralKnowledgeIndexesMutation.isPending
-                  }
-                  disabled={createGeneralKnowledgeMutation.isPending}
-                />
-                <DialogFooter>
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  <KnowledgeFieldsEditor
+                    value={knowledgeFieldValues}
+                    moduleOptions={moduleOptions}
+                    errors={knowledgeFieldErrors}
+                    onChange={handleKnowledgeFieldChange}
+                    showRevision
+                    showIndexFields
+                    showIndexGenerationControls
+                    autoGenerateIndexes={autoGenerateIndexes}
+                    onAutoGenerateIndexesChange={setAutoGenerateIndexes}
+                    onGenerateIndexes={handleGenerateGeneralKnowledgeIndexes}
+                    indexGenerationPending={
+                      generateGeneralKnowledgeIndexesMutation.isPending
+                    }
+                    disabled={createGeneralKnowledgeMutation.isPending}
+                  />
+                </div>
+                <DialogFooter className="border-t border-border bg-background px-6 py-4">
                   <Button
                     type="button"
                     variant="outline"

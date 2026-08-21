@@ -160,9 +160,10 @@ const knowledgeFilePreviewSchema = z
       .regex(/\.(?:md|txt)$/i, "仅支持 .md 和 .txt 文件"),
     fileSizeBytes: z.number().int().positive().max(KNOWLEDGE_FILE_MAX_BYTES),
     rawText: z.string(),
-    chunkSize: z.number().int().min(200).max(4000),
-    overlapRatio: z.number().min(0).max(0.4),
-    maxChunks: z.number().int().min(1).max(KNOWLEDGE_FILE_MAX_CANDIDATES),
+    chunkSettingMode: z.enum(["auto", "custom"]),
+    chunkSplitMode: z.enum(["paragraph"]).optional(),
+    paragraphChunkDeep: z.number().int().min(1).max(8).optional(),
+    chunkSize: z.number().int().min(64).max(4000).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -607,9 +608,10 @@ const kbRouter = factory
       let candidates: KnowledgeFileCandidate[];
       try {
         candidates = splitKnowledgeFile(payload.rawText, {
+          chunkSettingMode: payload.chunkSettingMode,
+          chunkSplitMode: payload.chunkSplitMode,
+          paragraphChunkDeep: payload.paragraphChunkDeep,
           chunkSize: payload.chunkSize,
-          overlapRatio: payload.overlapRatio,
-          maxChunks: payload.maxChunks,
         });
       } catch (error) {
         if (error instanceof KnowledgeFileParseError) {

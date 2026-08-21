@@ -34,6 +34,9 @@ import {
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_MODULES = 10;
 const MAX_INDEXES = 3;
+type ChunkSettingMode = "auto" | "custom";
+type ChunkSplitMode = "paragraph";
+type FileImportStep = "file" | "settings" | "preview" | "confirm";
 
 type FileImportDialogProps = {
   open: boolean;
@@ -161,10 +164,17 @@ export function FileImportDialog({
     useState<GeneralKnowledgeCategory | "">("");
   const [bulkModules, setBulkModules] = useState<string[]>([]);
   const [bulkCategory, setBulkCategory] = useState<GeneralKnowledgeCategory | "">("");
-  const [splitOptions, setSplitOptions] = useState({
-    chunkSize: 1200,
-    overlapRatio: 0.1,
-    maxChunks: 100,
+  const [activeStep, setActiveStep] = useState<FileImportStep>("file");
+  const [splitOptions, setSplitOptions] = useState<{
+    chunkSettingMode: ChunkSettingMode;
+    chunkSplitMode: ChunkSplitMode;
+    paragraphChunkDeep: number;
+    chunkSize: number;
+  }>({
+    chunkSettingMode: "auto",
+    chunkSplitMode: "paragraph",
+    paragraphChunkDeep: 3,
+    chunkSize: 1000,
   });
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
@@ -277,18 +287,23 @@ export function FileImportDialog({
       setErrorMessage("请先选择默认知识类型");
       return;
     }
-    if (
-      !Number.isInteger(splitOptions.chunkSize) ||
-      splitOptions.chunkSize < 200 ||
-      splitOptions.chunkSize > 4000 ||
-      splitOptions.overlapRatio < 0 ||
-      splitOptions.overlapRatio > 0.4 ||
-      !Number.isInteger(splitOptions.maxChunks) ||
-      splitOptions.maxChunks < 1 ||
-      splitOptions.maxChunks > 100
-    ) {
-      setErrorMessage("请检查分块参数范围");
-      return;
+    if (splitOptions.chunkSettingMode === "custom") {
+      if (
+        !Number.isInteger(splitOptions.chunkSize) ||
+        splitOptions.chunkSize < 64 ||
+        splitOptions.chunkSize > 4000
+      ) {
+        setErrorMessage("自定义分块长度必须在 64 到 4000 之间");
+        return;
+      }
+      if (
+        !Number.isInteger(splitOptions.paragraphChunkDeep) ||
+        splitOptions.paragraphChunkDeep < 1 ||
+        splitOptions.paragraphChunkDeep > 8
+      ) {
+        setErrorMessage("标题识别层级必须在 H1 到 H8 之间");
+        return;
+      }
     }
 
     setIsParsing(true);
@@ -300,7 +315,10 @@ export function FileImportDialog({
             fileName,
             fileSizeBytes,
             rawText,
-            ...splitOptions,
+            chunkSettingMode: splitOptions.chunkSettingMode,
+            chunkSplitMode: splitOptions.chunkSplitMode,
+            paragraphChunkDeep: splitOptions.paragraphChunkDeep,
+            chunkSize: splitOptions.chunkSize,
           },
         },
         { fetch: kbFilePreviewFetch },
@@ -355,12 +373,16 @@ export function FileImportDialog({
             : existingMatches.has(candidate.candidateId)
               ? "existing"
               : "none",
-        };
+          };
       });
+      if (!candidatesWithDuplicates.length) {
+        throw new Error("没有解析出可导入的知识，请检查文件内容或调整标题深度");
+      }
 
       setCandidates(candidatesWithDuplicates);
       setSelectedCandidateIds(candidatesWithDuplicates.map((candidate) => candidate.candidateId));
       setSelectedCandidateId(candidatesWithDuplicates[0]?.candidateId ?? "");
+      setActiveStep("preview");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "文件解析失败");
       setCandidates([]);
@@ -376,6 +398,31 @@ export function FileImportDialog({
       return;
     }
     void requestPreview();
+  };
+
+  const goToSettings = () => {
+    if (!file || isReadingFile) {
+      setErrorMessage("请先选择并读取文件");
+      return;
+    }
+    setErrorMessage("");
+    setActiveStep("settings");
+  };
+
+  const goToConfirm = () => {
+    const selected = candidates.filter((candidate) =>
+      selectedCandidateIds.includes(candidate.candidateId),
+    );
+    if (!selected.length) {
+      setErrorMessage("请至少选择一条候选知识");
+      return;
+    }
+    if (selected.some((candidate) => Boolean(validateCandidate(candidate)))) {
+      setErrorMessage("请先修正已选候选中的必填内容");
+      return;
+    }
+    setErrorMessage("");
+    setActiveStep("confirm");
   };
 
   const generateIndexes = async (items: FileImportCandidate[]) => {
@@ -573,303 +620,387 @@ export function FileImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-6xl overflow-hidden p-0">
+      <DialogContent className="grid-rows-[auto_minmax(0,1fr)_auto] h-[min(900px,calc(100vh-2rem))] w-[min(1180px,calc(100vw-2rem))] sm:max-w-[1180px] overflow-hidden p-0">
         <DialogHeader className="border-b border-border px-6 py-5">
-          <DialogTitle>导入知识库文件</DialogTitle>
-          <p className="text-sm text-muted-foreground">
-            先解析为候选知识，确认内容后再导入现有通用知识库。
-          </p>
+          <div className="flex items-center justify-between gap-4 pr-8">
+            <div>
+              <DialogTitle>导入知识库文件</DialogTitle>
+              <p className="mt-2 text-sm text-muted-foreground">
+                选择文件，调整分块方式，逐条确认后写入现有通用知识库。
+              </p>
+            </div>
+            <div className="hidden text-right text-xs text-muted-foreground sm:block">
+              <p>{file ? fileName : "尚未选择文件"}</p>
+              <p className="mt-1">
+                {candidates.length ? `${selectedCount}/${candidates.length} 条候选已选` : "等待解析"}
+              </p>
+            </div>
+          </div>
+          <nav aria-label="文件导入步骤" className="grid grid-cols-4 gap-2 pt-4">
+            {([
+              ["file", "选择文件"],
+              ["settings", "参数设置"],
+              ["preview", "数据预览"],
+              ["confirm", "确认导入"],
+            ] as const).map(([step, label], index) => (
+              <button
+                key={step}
+                type="button"
+                className={`border-t-2 px-1 pt-2 text-left text-xs ${activeStep === step ? "border-primary text-foreground" : "border-border text-muted-foreground"}`}
+                onClick={() => {
+                  if (
+                    step === "file" ||
+                    (step === "settings" && file) ||
+                    (step === "preview" && candidates.length) ||
+                    (step === "confirm" && candidates.length)
+                  ) {
+                    setActiveStep(step);
+                  }
+                }}
+              >
+                <span className="mr-1">{index + 1}.</span>{label}
+              </button>
+            ))}
+          </nav>
         </DialogHeader>
 
-        <main className="grid max-h-[calc(92vh-9rem)] gap-5 overflow-y-auto px-6 py-5">
-          <section className="grid gap-4 rounded-xl border border-border bg-muted/20 p-4">
-            <div className="flex flex-wrap items-end justify-between gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="knowledge-file">本地文件</Label>
-                <Input
-                  id="knowledge-file"
-                  type="file"
-                  accept=".md,.txt,text/markdown,text/plain"
-                  disabled={isReadingFile || isParsing || isImporting}
-                  onChange={(event) => void handleFileChange(event.target.files?.[0])}
-                />
-              </div>
-              <div className="text-sm text-muted-foreground">
-                {file ? `${fileName} · ${(fileSizeBytes / 1024).toFixed(1)} KB` : "仅支持 .md、.txt，最大 10 MB"}
-              </div>
-            </div>
-            {fileWarning ? <p className="text-sm text-amber-600">{fileWarning}</p> : null}
-            <div className="grid gap-2">
-              <Label>本次可用工单模块</Label>
-              <div className="grid max-h-32 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-3">
-                {moduleOptions.map((item) => (
-                  <label key={item.code} className="flex items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={defaultModules.includes(item.code)}
-                      disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
-                      onCheckedChange={(checked) => {
-                        if (checked && defaultModules.length >= MAX_MODULES) {
-                          setErrorMessage(`模块数量不能超过 ${MAX_MODULES} 个`);
-                          return;
-                        }
-                        setDefaultModules((current) =>
-                          checked
-                            ? Array.from(new Set([...current, item.code]))
-                            : current.filter((code) => code !== item.code),
-                        );
-                      }}
+        <main className="min-h-0 overflow-y-auto px-6 py-5">
+          {activeStep === "file" ? (
+            <section className="mx-auto grid max-w-4xl gap-5">
+              <div className="grid gap-4 rounded-xl border border-border bg-muted/20 p-5">
+                <div className="flex flex-wrap items-end justify-between gap-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="knowledge-file">本地文件</Label>
+                    <Input
+                      id="knowledge-file"
+                      type="file"
+                      accept=".md,.txt,text/markdown,text/plain"
+                      disabled={isReadingFile || isParsing || isImporting}
+                      onChange={(event) => void handleFileChange(event.target.files?.[0])}
                     />
-                    {item.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="max-w-sm">
-              <Label>默认知识类型</Label>
-              <Select
-                value={defaultCategory}
-                disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
-                onValueChange={(value) => setDefaultCategory(value as GeneralKnowledgeCategory)}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="选择知识类型" />
-                </SelectTrigger>
-                <SelectContent>
-                  {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
-                    <SelectItem key={category} value={category}>
-                      {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </section>
-
-          <section className="grid gap-4 rounded-xl border border-border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">分块设置与预览</h3>
-                <p className="text-xs text-muted-foreground">Markdown 标题识别固定开启。</p>
-              </div>
-              <Button type="button" variant="outline" disabled={isReadingFile || isParsing || isImporting} onClick={handleRechunk}>
-                {isParsing ? "解析中" : candidates.length ? "重新分块" : "开始解析"}
-              </Button>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="grid gap-2">
-                <Label htmlFor="chunk-size">每条内容长度</Label>
-                <Input
-                  id="chunk-size"
-                  type="number"
-                  min={200}
-                  max={4000}
-                  value={splitOptions.chunkSize}
-                  disabled={isParsing || isImporting}
-                  onChange={(event) => setSplitOptions((current) => ({ ...current, chunkSize: Number(event.target.value) }))}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="overlap-ratio">内容重叠（百分比）</Label>
-                <Input
-                  id="overlap-ratio"
-                  type="number"
-                  min={0}
-                  max={40}
-                  value={Math.round(splitOptions.overlapRatio * 100)}
-                  disabled={isParsing || isImporting}
-                  onChange={(event) => setSplitOptions((current) => ({ ...current, overlapRatio: Number(event.target.value) / 100 }))}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="max-chunks">最大候选数量</Label>
-                <Input
-                  id="max-chunks"
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={splitOptions.maxChunks}
-                  disabled={isParsing || isImporting}
-                  onChange={(event) => setSplitOptions((current) => ({ ...current, maxChunks: Number(event.target.value) }))}
-                />
-              </div>
-            </div>
-            {candidates.length ? (
-              <p className="text-sm text-muted-foreground">已生成 {candidates.length} 条候选知识，请逐条确认。</p>
-            ) : null}
-          </section>
-
-          <section className="grid gap-4 rounded-xl border border-border p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">候选审核</h3>
-                <p className="text-xs text-muted-foreground">已选 {selectedCount} 条，共 {candidates.length} 条</p>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={candidates.length > 0 && selectedCount === candidates.length}
-                  onCheckedChange={(checked) =>
-                    setSelectedCandidateIds(checked ? candidates.map((candidate) => candidate.candidateId) : [])
-                  }
-                />
-                全选
-              </label>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-              <div className="grid content-start gap-2">
-                {candidates.map((candidate, index) => (
-                  <div
-                    key={candidate.candidateId}
-                    className={`rounded-lg border p-3 text-left ${selectedCandidate?.candidateId === candidate.candidateId ? "border-primary bg-primary/5" : "border-border"}`}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {file
+                      ? `${fileName} · ${(fileSizeBytes / 1024).toFixed(1)} KB`
+                      : "仅支持 .md、.txt，最大 10 MB"}
+                  </div>
+                </div>
+                {fileWarning ? <p className="text-sm text-amber-600">{fileWarning}</p> : null}
+                <div className="grid gap-2">
+                  <Label>本次可用工单模块</Label>
+                  <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">
+                    {moduleOptions.map((item) => (
+                      <label key={item.code} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={defaultModules.includes(item.code)}
+                          disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
+                          onCheckedChange={(checked) => {
+                            if (checked && defaultModules.length >= MAX_MODULES) {
+                              setErrorMessage(`模块数量不能超过 ${MAX_MODULES} 个`);
+                              return;
+                            }
+                            setDefaultModules((current) =>
+                              checked
+                                ? Array.from(new Set([...current, item.code]))
+                                : current.filter((code) => code !== item.code),
+                            );
+                          }}
+                        />
+                        {item.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="max-w-sm">
+                  <Label>默认知识类型</Label>
+                  <Select
+                    value={defaultCategory}
+                    disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
+                    onValueChange={(value) => setDefaultCategory(value as GeneralKnowledgeCategory)}
                   >
-                    <div className="flex items-start gap-2">
-                      <Checkbox
-                        checked={selectedCandidateIds.includes(candidate.candidateId)}
-                        onCheckedChange={(checked) => toggleCandidate(candidate.candidateId, checked === true)}
-                      />
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 text-left"
-                        onClick={() => setSelectedCandidateId(candidate.candidateId)}
-                      >
-                        <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || "未填写标题"}</span>
-                        <span className="mt-1 flex flex-wrap gap-1">
-                          <Badge variant="outline">{candidate.indexStatus === "success" ? "索引完成" : candidate.indexStatus === "failed" ? "索引失败" : "索引待处理"}</Badge>
-                          <Badge variant={candidate.importStatus === "success" ? "default" : "outline"}>
-                            {candidate.importStatus === "success" ? "已导入" : candidate.importStatus === "failed" ? "导入失败" : candidate.importStatus === "skipped" ? "已跳过" : "待导入"}
-                          </Badge>
-                        </span>
-                        {candidate.error ? (
-                          <span className="mt-1 block text-xs text-destructive">{candidate.error}</span>
-                        ) : null}
-                      </button>
-                    </div>
-                    {candidate.duplicate !== "none" ? (
-                      <div className="mt-2 grid gap-2 text-xs text-amber-700">
-                        <span>{candidate.duplicate === "current" ? "与当前文件中的其他候选正文重复" : "与已有知识正文重复"}</span>
-                        <div className="flex gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={candidate.duplicateAction === "skip" ? "default" : "outline"}
-                            onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "skip" as const } : item))}
-                          >
-                            跳过
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={candidate.duplicateAction === "continue" ? "default" : "outline"}
-                            onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "continue" as const } : item))}
-                          >
-                            继续导入
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                    {candidate.indexStatus === "failed" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="mt-2"
-                        onClick={() => void generateIndexes([candidate])}
-                      >
-                        重试索引
-                      </Button>
-                    ) : null}
-                    {candidate.importStatus === "failed" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="mt-2 ml-2"
-                        onClick={() => void handleImport([candidate])}
-                      >
-                        重试导入
-                      </Button>
-                    ) : null}
-                  </div>
-                ))}
-                {!candidates.length ? <p className="text-sm text-muted-foreground">解析后将在这里显示候选知识。</p> : null}
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="选择知识类型" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
+                        <SelectItem key={category} value={category}>
+                          {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  disabled={!file || isReadingFile || isParsing || isImporting}
+                  onClick={goToSettings}
+                >
+                  下一步：参数设置
+                </Button>
+              </div>
+            </section>
+          ) : null}
 
-              <div className="min-w-0">
-                {selectedCandidate ? (
-                  <>
-                    <KnowledgeFieldsEditor
-                      value={selectedCandidate}
-                      moduleOptions={availableModuleOptions}
-                      errors={selectedCandidate.errors}
-                      onChange={(value) => setCandidateValues(selectedCandidate.candidateId, value)}
-                      showRevision
-                      showIndexFields
-                      disabled={isImporting || selectedCandidate.importStatus === "success"}
-                    />
-                    {selectedCandidate.contentModified ? (
-                      <p className="mt-3 text-xs text-amber-600">
-                        正文已修改，召回索引可能不再匹配。你仍然可以继续导入。
-                      </p>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
-                    请选择候选知识
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-
-          <section className="grid gap-4 rounded-xl border border-border bg-muted/20 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">批量设置和处理状态</h3>
-                <p className="text-xs text-muted-foreground">批量设置只作用于当前勾选的候选。</p>
-              </div>
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span>待处理 {pendingCount}</span>
-                <span>成功 {successCount}</span>
-                <span>失败 {failedCount}</span>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto]">
-              <div className="grid gap-2">
-                <Label>批量设置模块</Label>
-                <div className="flex max-h-20 flex-wrap gap-x-3 gap-y-2 overflow-auto rounded-md border border-border bg-background p-2">
-                  {availableModuleOptions.map((item) => (
-                    <label key={item.code} className="flex items-center gap-1 text-xs">
-                      <Checkbox
-                        checked={bulkModules.includes(item.code)}
-                        onCheckedChange={(checked) => setBulkModules((current) => checked ? Array.from(new Set([...current, item.code])) : current.filter((code) => code !== item.code))}
-                      />
-                      {item.label}
-                    </label>
+          {activeStep === "settings" ? (
+            <section className="mx-auto grid max-w-4xl gap-5">
+              <div className="rounded-xl border border-border bg-muted/20 p-5">
+                <h3 className="text-base font-semibold">选择分块方式</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  默认参数适合大多数 Markdown 文件。需要改变标题层级或单段长度时才选择自定义参数。
+                </p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {([
+                    ["auto", "默认参数", "按 Markdown 标题和自然段落处理，系统自动选择长度和重叠方式。"],
+                    ["custom", "自定义参数", "只在文件结构特殊时选择标题深度或单段长度。"],
+                  ] as const).map(([mode, title, description]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`rounded-lg border p-4 text-left ${splitOptions.chunkSettingMode === mode ? "border-primary bg-primary/5" : "border-border"}`}
+                      onClick={() => setSplitOptions((current) => ({ ...current, chunkSettingMode: mode }))}
+                    >
+                      <p className="font-medium">{title}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+                    </button>
                   ))}
                 </div>
               </div>
-              <div className="grid gap-2">
-                <Label>批量设置知识类型</Label>
-                <Select value={bulkCategory} onValueChange={(value) => setBulkCategory(value as GeneralKnowledgeCategory)}>
-                  <SelectTrigger><SelectValue placeholder="不修改" /></SelectTrigger>
-                  <SelectContent>
-                    {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
-                      <SelectItem key={category} value={category}>{GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {splitOptions.chunkSettingMode === "custom" ? (
+                <div className="grid gap-4 rounded-xl border border-border p-5">
+                  <div className="grid gap-2">
+                    <p className="text-sm font-medium">按段落和标题</p>
+                    <p className="text-xs text-muted-foreground">
+                      候选标题使用当前标题；父级标题只作为正文上下文。
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label>识别到第几级标题</Label>
+                      <Select
+                        value={String(splitOptions.paragraphChunkDeep)}
+                        onValueChange={(value) =>
+                          setSplitOptions((current) => ({ ...current, paragraphChunkDeep: Number(value) }))
+                        }
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
+                            <SelectItem key={level} value={String(level)}>
+                              识别到 H{level}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">更深的标题会留在当前知识正文里。</p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="chunk-size">单条内容长度</Label>
+                      <Input
+                        id="chunk-size"
+                        type="number"
+                        min={64}
+                        max={4000}
+                        step={100}
+                        value={splitOptions.chunkSize}
+                        disabled={isParsing || isImporting}
+                        onChange={(event) =>
+                          setSplitOptions((current) => ({ ...current, chunkSize: Number(event.target.value) }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">内容超过这个长度时，系统会按段落和标点继续处理。</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="flex justify-between gap-3">
+                <Button type="button" variant="outline" onClick={() => setActiveStep("file")}>上一步</Button>
+                <Button type="button" disabled={isParsing || isImporting} onClick={handleRechunk}>
+                  {isParsing ? "解析中" : "生成预览"}
+                </Button>
               </div>
-              <Button type="button" variant="outline" className="self-end" onClick={applyBulkSettings}>应用</Button>
-            </div>
-          </section>
+            </section>
+          ) : null}
+
+          {activeStep === "preview" ? (
+            <section className="grid gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold">候选知识审核</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    每条候选都可以修改标题、正文、模块、知识类型和索引。
+                  </p>
+                </div>
+                <div className="flex gap-2 text-xs text-muted-foreground">
+                  <Badge variant="outline">已选 {selectedCount}</Badge>
+                  <Badge variant="outline">共 {candidates.length}</Badge>
+                  <Badge variant="outline">最多 100 条</Badge>
+                </div>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+                <div className="grid content-start gap-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={candidates.length > 0 && selectedCount === candidates.length}
+                      onCheckedChange={(checked) =>
+                        setSelectedCandidateIds(checked ? candidates.map((candidate) => candidate.candidateId) : [])
+                      }
+                    />
+                    全选候选
+                  </label>
+                  {candidates.map((candidate, index) => (
+                    <div
+                      key={candidate.candidateId}
+                      className={`rounded-lg border p-3 text-left ${selectedCandidate?.candidateId === candidate.candidateId ? "border-primary bg-primary/5" : "border-border"}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <Checkbox
+                          checked={selectedCandidateIds.includes(candidate.candidateId)}
+                          onCheckedChange={(checked) => toggleCandidate(candidate.candidateId, checked === true)}
+                        />
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => setSelectedCandidateId(candidate.candidateId)}
+                        >
+                          <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || "未填写标题"}</span>
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            <Badge variant="outline">{candidate.indexStatus === "success" ? "索引完成" : candidate.indexStatus === "failed" ? "索引失败" : "索引待处理"}</Badge>
+                            <Badge variant={candidate.importStatus === "success" ? "default" : "outline"}>
+                              {candidate.importStatus === "success" ? "已导入" : candidate.importStatus === "failed" ? "导入失败" : candidate.importStatus === "skipped" ? "已跳过" : "待导入"}
+                            </Badge>
+                          </span>
+                          {candidate.error ? <span className="mt-1 block text-xs text-destructive">{candidate.error}</span> : null}
+                        </button>
+                      </div>
+                      {candidate.duplicate !== "none" ? (
+                        <div className="mt-2 grid gap-2 text-xs text-amber-700">
+                          <span>{candidate.duplicate === "current" ? "与当前文件中的其他候选正文重复" : "与已有知识正文重复"}</span>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={candidate.duplicateAction === "skip" ? "default" : "outline"}
+                              onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "skip" as const } : item))}
+                            >
+                              跳过
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={candidate.duplicateAction === "continue" ? "default" : "outline"}
+                              onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "continue" as const } : item))}
+                            >
+                              继续导入
+                            </Button>
+                          </div>
+                        </div>
+                      ) : null}
+                      {candidate.indexStatus === "failed" ? (
+                        <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void generateIndexes([candidate])}>重试索引</Button>
+                      ) : null}
+                      {candidate.importStatus === "failed" ? (
+                        <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>重试导入</Button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="min-w-0">
+                  {selectedCandidate ? (
+                    <>
+                      <KnowledgeFieldsEditor
+                        value={selectedCandidate}
+                        moduleOptions={availableModuleOptions}
+                        errors={selectedCandidate.errors}
+                        onChange={(value) => setCandidateValues(selectedCandidate.candidateId, value)}
+                        showRevision
+                        showIndexFields
+                        disabled={isImporting || selectedCandidate.importStatus === "success"}
+                      />
+                      {selectedCandidate.contentModified ? (
+                        <p className="mt-3 text-xs text-amber-600">正文已修改，召回索引可能不再匹配。你仍然可以继续导入。</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">请选择候选知识</div>
+                  )}
+                </div>
+              </div>
+              <section className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">批量设置和处理状态</h3>
+                    <p className="text-xs text-muted-foreground">批量设置只作用于当前勾选的候选。</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>待处理 {pendingCount}</span>
+                    <span>成功 {successCount}</span>
+                    <span>失败 {failedCount}</span>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto]">
+                  <div className="grid gap-2">
+                    <Label>批量设置模块</Label>
+                    <div className="flex max-h-20 flex-wrap gap-x-3 gap-y-2 overflow-auto rounded-md border border-border bg-background p-2">
+                      {availableModuleOptions.map((item) => (
+                        <label key={item.code} className="flex items-center gap-1 text-xs">
+                          <Checkbox
+                            checked={bulkModules.includes(item.code)}
+                            onCheckedChange={(checked) => setBulkModules((current) => checked ? Array.from(new Set([...current, item.code])) : current.filter((code) => code !== item.code))}
+                          />
+                          {item.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>批量设置知识类型</Label>
+                    <Select value={bulkCategory} onValueChange={(value) => setBulkCategory(value as GeneralKnowledgeCategory)}>
+                      <SelectTrigger><SelectValue placeholder="不修改" /></SelectTrigger>
+                      <SelectContent>
+                        {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
+                          <SelectItem key={category} value={category}>{GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button type="button" variant="outline" className="self-end" onClick={applyBulkSettings}>应用</Button>
+                </div>
+              </section>
+              <div className="flex justify-between gap-3">
+                <Button type="button" variant="outline" onClick={() => setActiveStep("settings")}>返回参数设置</Button>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" disabled={isParsing || isImporting || !candidates.length} onClick={handleGenerateIndexes}>一键生成索引</Button>
+                  <Button type="button" disabled={isParsing || isImporting} onClick={goToConfirm}>下一步：确认导入</Button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {activeStep === "confirm" ? (
+            <section className="mx-auto grid max-w-3xl gap-5">
+              <div className="rounded-xl border border-border bg-muted/20 p-5">
+                <h3 className="text-base font-semibold">确认导入</h3>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <div><dt className="text-muted-foreground">文件</dt><dd className="mt-1 break-all">{fileName}</dd></div>
+                  <div><dt className="text-muted-foreground">候选数量</dt><dd className="mt-1">{selectedCount} 条</dd></div>
+                  <div><dt className="text-muted-foreground">索引状态</dt><dd className="mt-1">已生成 {candidates.filter((candidate) => candidate.indexStatus === "success").length} 条，未生成也可以导入</dd></div>
+                  <div><dt className="text-muted-foreground">失败状态</dt><dd className="mt-1">{failedCount ? `${failedCount} 条失败，可返回重试` : "没有失败项"}</dd></div>
+                </dl>
+              </div>
+              <div className="flex justify-between gap-3">
+                <Button type="button" variant="outline" disabled={isImporting} onClick={() => setActiveStep("preview")}>返回审核</Button>
+                <Button type="button" disabled={isImporting} onClick={() => void handleImport()}>{isImporting ? "导入中" : "确认并导入选中内容"}</Button>
+              </div>
+            </section>
+          ) : null}
         </main>
 
-        <DialogFooter className="sticky bottom-0 border-t border-border bg-background px-6 py-4">
-          {errorMessage ? <p className="mr-auto max-w-md text-sm text-destructive">{errorMessage}</p> : null}
+        <DialogFooter className="border-t border-border bg-background px-6 py-4">
+          {errorMessage ? <p role="alert" className="mr-auto max-w-xl text-sm text-destructive">{errorMessage}</p> : null}
           <Button type="button" variant="outline" disabled={isImporting} onClick={() => onOpenChange(false)}>取消</Button>
-          <Button type="button" variant="outline" disabled={isParsing || isImporting || !candidates.length} onClick={handleGenerateIndexes}>一键生成索引</Button>
-          <Button type="button" disabled={isParsing || isImporting || !candidates.length} onClick={() => void handleImport()}>
-            {isImporting ? "导入中" : "确认并导入"}
-          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -2,10 +2,17 @@ export const KNOWLEDGE_FILE_MAX_BYTES = 10 * 1024 * 1024;
 export const KNOWLEDGE_FILE_MAX_CANDIDATES = 100;
 export const KNOWLEDGE_FILE_MAX_CONTENT_LENGTH = 20_000;
 
+const FASTGPT_AUTO_CHUNK_SIZE = 1000;
+const FASTGPT_OVERLAP_RATIO = 0.2;
+const FASTGPT_AUTO_PARAGRAPH_DEEP = 3;
+const KNOWLEDGE_FILE_MIN_CHUNK_SIZE = 64;
+const KNOWLEDGE_FILE_MAX_CHUNK_SIZE = 4000;
+
 export type KnowledgeFileSplitOptions = {
-  chunkSize: number;
-  overlapRatio: number;
-  maxChunks: number;
+  chunkSettingMode: "auto" | "custom";
+  chunkSplitMode?: "paragraph";
+  paragraphChunkDeep?: number;
+  chunkSize?: number;
 };
 
 export type KnowledgeFileCandidate = {
@@ -15,25 +22,21 @@ export type KnowledgeFileCandidate = {
 
 export class KnowledgeFileParseError extends Error {}
 
-type KnowledgeFileSection = {
-  title: string;
-  lines: string[];
-  boundary: boolean;
+type FastGPTSplitSettings = {
+  chunkSize: number;
+  paragraphChunkDeep: number;
+  overlapRatio: number;
 };
 
-const SPLIT_BOUNDARIES = new Set([
-  "。",
-  "！",
-  "？",
-  "；",
-  "，",
-  ".",
-  "!",
-  "?",
-  ";",
-  ",",
-  "\n",
-]);
+type FastGPTChunk = {
+  content: string;
+  title: string;
+};
+
+type FastGPTSection = {
+  title: string;
+  lines: string[];
+};
 
 function normalizeLineEndings(rawText: string): string {
   return rawText.replace(/\r\n?/g, "\n");
@@ -55,120 +58,368 @@ function isFence(line: string): boolean {
   return /^[ \t]{0,3}(`{3,}|~{3,})/.test(line);
 }
 
-function createSectionCandidate(
-  section: KnowledgeFileSection,
-): KnowledgeFileCandidate | null {
-  const content = section.lines.join("\n");
-  if (!content.trim()) return null;
-  if (section.boundary && !section.lines.slice(1).join("\n").trim()) {
-    return null;
+function resolveFastGPTSettings(
+  options: KnowledgeFileSplitOptions,
+): FastGPTSplitSettings {
+  if (options.chunkSettingMode === "auto") {
+    return {
+      chunkSize: FASTGPT_AUTO_CHUNK_SIZE,
+      paragraphChunkDeep: FASTGPT_AUTO_PARAGRAPH_DEEP,
+      overlapRatio: FASTGPT_OVERLAP_RATIO,
+    };
   }
+
+  const chunkSize = options.chunkSize ?? FASTGPT_AUTO_CHUNK_SIZE;
+  if (
+    !Number.isInteger(chunkSize) ||
+    chunkSize < KNOWLEDGE_FILE_MIN_CHUNK_SIZE ||
+    chunkSize > KNOWLEDGE_FILE_MAX_CHUNK_SIZE
+  ) {
+    throw new KnowledgeFileParseError("自定义分块长度必须在 64 到 4000 之间");
+  }
+
+  const paragraphChunkDeep =
+    options.paragraphChunkDeep ?? FASTGPT_AUTO_PARAGRAPH_DEEP;
+  if (
+    !Number.isInteger(paragraphChunkDeep) ||
+    paragraphChunkDeep < 1 ||
+    paragraphChunkDeep > 8
+  ) {
+    throw new KnowledgeFileParseError("标题识别层级必须在 H1 到 H8 之间");
+  }
+
   return {
-    title: section.title,
-    content,
+    chunkSize,
+    paragraphChunkDeep,
+    overlapRatio: FASTGPT_OVERLAP_RATIO,
   };
 }
 
-function findSplitEnd(content: string, start: number, maxEnd: number): number {
-  const minimumEnd = Math.min(
-    maxEnd,
-    start + Math.max(1, Math.floor((maxEnd - start) * 0.5)),
+function getLineUnits(text: string): string[] {
+  return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  const header = lines[index]?.trim() ?? "";
+  const separator = lines[index + 1]?.trim() ?? "";
+  return (
+    header.startsWith("|") &&
+    header.endsWith("|") &&
+    /^\|?(?:[ \t]*:?-+[ \t]*\|)+[ \t]*$/.test(separator)
   );
-  for (let index = maxEnd - 1; index >= minimumEnd; index -= 1) {
-    if (SPLIT_BOUNDARIES.has(content[index]!)) return index + 1;
+}
+
+function getParagraphUnits(text: string): string[] {
+  const lines = getLineUnits(text);
+  const units: string[] = [];
+  let paragraph = "";
+  let index = 0;
+
+  const flushParagraph = () => {
+    if (paragraph) units.push(paragraph);
+    paragraph = "";
+  };
+
+  while (index < lines.length) {
+    const line = lines[index]!;
+    if (isFence(line)) {
+      flushParagraph();
+      let codeBlock = line;
+      const fenceMarker = line.trim().slice(0, 3);
+      index += 1;
+      while (index < lines.length) {
+        codeBlock += lines[index]!;
+        const currentLine = lines[index]!.trim();
+        index += 1;
+        if (currentLine.startsWith(fenceMarker)) break;
+      }
+      units.push(codeBlock);
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      flushParagraph();
+      let table = lines[index]! + lines[index + 1]!;
+      index += 2;
+      while (index < lines.length && lines[index]!.trim().startsWith("|")) {
+        table += lines[index]!;
+        index += 1;
+      }
+      units.push(table);
+      continue;
+    }
+
+    paragraph += line;
+    index += 1;
+    if (!line.trim()) flushParagraph();
   }
-  return maxEnd;
+
+  flushParagraph();
+  return units.filter((unit) => unit.trim());
+}
+
+function getSentenceUnits(text: string): string[] {
+  const chars = Array.from(text);
+  const units: string[] = [];
+  let current = "";
+
+  const pushCurrent = () => {
+    if (current) units.push(current);
+    current = "";
+  };
+
+  chars.forEach((char, index) => {
+    current += char;
+    const next = chars[index + 1];
+    const isChineseBoundary = "。！？；".includes(char);
+    const isAsciiBoundary = ".!?;".includes(char) && (!next || /\s/.test(next));
+    if (isChineseBoundary || isAsciiBoundary) pushCurrent();
+  });
+
+  pushCurrent();
+  return units;
+}
+
+function getWordUnits(text: string): string[] {
+  const chars = Array.from(text);
+  const units: string[] = [];
+  let current = "";
+
+  chars.forEach((char) => {
+    current += char;
+    if (/\s/.test(char)) {
+      units.push(current);
+      current = "";
+    }
+  });
+  if (current) units.push(current);
+  return units;
+}
+
+function getPunctuationUnits(text: string): string[] {
+  const chars = Array.from(text);
+  const units: string[] = [];
+  let current = "";
+
+  chars.forEach((char) => {
+    current += char;
+    if ("，,".includes(char)) {
+      units.push(current);
+      current = "";
+    }
+  });
+  if (current) units.push(current);
+  return units;
+}
+
+function getSplitUnits(text: string, level: number): string[] {
+  if (level === 0) return getParagraphUnits(text);
+  if (level === 1) return getLineUnits(text).filter((unit) => unit.length > 0);
+  if (level === 2) return getSentenceUnits(text);
+  if (level === 3) return getPunctuationUnits(text);
+  if (level === 4) return getWordUnits(text);
+  return Array.from(text);
+}
+
+function splitTextRecursively(
+  text: string,
+  maxLength: number,
+  level = 0,
+  overlapRatio = FASTGPT_OVERLAP_RATIO,
+): string[] {
+  if (text.length <= maxLength) return [text];
+
+  const units = getSplitUnits(text, level);
+  if (units.length <= 1 && level < 5) {
+    return splitTextRecursively(text, maxLength, level + 1, overlapRatio);
+  }
+
+  const chunks: string[] = [];
+  const maxChunkLength = Math.max(maxLength, Math.floor(maxLength * 1.2));
+  const minChunkLength = maxLength * 0.8;
+  const allowOverlap = level >= 2;
+  const maxOverlapLength = maxLength * Math.min(overlapRatio, 0.4);
+  let currentUnits: string[] = [];
+  let currentNewUnits: string[] = [];
+  let currentLength = 0;
+  let currentNewLength = 0;
+  let currentHasNewText = false;
+
+  const pushCurrent = () => {
+    if (currentHasNewText) chunks.push(currentUnits.join(""));
+    const lastUnits = currentHasNewText ? currentUnits : [];
+    currentUnits = allowOverlap
+      ? getOneTextOverlapText(lastUnits, maxOverlapLength)
+      : [];
+    currentNewUnits = [];
+    currentLength = currentUnits.reduce((sum, unit) => sum + unit.length, 0);
+    currentNewLength = 0;
+    currentHasNewText = false;
+  };
+
+  for (const unit of units) {
+    if (!unit) continue;
+
+    if (unit.length > maxChunkLength) {
+      pushCurrent();
+      chunks.push(
+        ...splitTextRecursively(unit, maxLength, Math.min(level + 1, 5), overlapRatio),
+      );
+      currentUnits = [];
+      currentNewUnits = [];
+      currentLength = 0;
+      currentNewLength = 0;
+      currentHasNewText = false;
+      continue;
+    }
+
+    if (
+      currentLength > 0 &&
+      currentLength + unit.length > maxChunkLength
+    ) {
+      pushCurrent();
+    }
+
+    if (currentUnits.length > 0 && currentLength + unit.length > maxChunkLength) {
+      currentUnits = [];
+      currentNewUnits = [];
+      currentLength = 0;
+      currentNewLength = 0;
+      currentHasNewText = false;
+    }
+
+    currentUnits.push(unit);
+    currentNewUnits.push(unit);
+    currentLength += unit.length;
+    currentNewLength += unit.length;
+    currentHasNewText = true;
+
+    if (currentLength >= minChunkLength && currentLength >= maxLength) {
+      pushCurrent();
+    }
+  }
+
+  if (currentHasNewText) {
+    if (chunks.length && currentNewLength < minChunkLength * 0.5) {
+      chunks[chunks.length - 1] += currentNewUnits.join("");
+    } else {
+      chunks.push(currentUnits.join(""));
+    }
+  }
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
+function getOneTextOverlapText(
+  units: string[],
+  maxOverlapLength: number,
+): string[] {
+  const overlap: string[] = [];
+  let length = 0;
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    const unit = units[index]!;
+    if (length + unit.length > maxOverlapLength) break;
+    overlap.unshift(unit);
+    length += unit.length;
+  }
+  return overlap;
+}
+
+function collectSections(
+  rawText: string,
+  paragraphChunkDeep: number,
+): FastGPTSection[] {
+  const lines = rawText.split("\n");
+  const sections: FastGPTSection[] = [];
+  let current: FastGPTSection = { title: "", lines: [] };
+  const headingStack: Array<{ level: number; line: string }> = [];
+  let inFence = false;
+
+  const flush = () => {
+    if (current.lines.length) sections.push(current);
+    current = { title: "", lines: [] };
+  };
+
+  for (const line of lines) {
+    const heading = inFence ? null : getHeading(line);
+    if (heading && heading.level <= paragraphChunkDeep) {
+      flush();
+      while (
+        headingStack.length &&
+        headingStack[headingStack.length - 1]!.level >= heading.level
+      ) {
+        headingStack.pop();
+      }
+      current = {
+        title: heading.title,
+        lines: [...headingStack.map((item) => item.line), line],
+      };
+      headingStack.push({ level: heading.level, line });
+    } else {
+      current.lines.push(line);
+    }
+    if (isFence(line)) inFence = !inFence;
+  }
+  flush();
+  return sections;
+}
+
+function hasKnowledgeBody(content: string): boolean {
+  const lines = content.split("\n");
+  let inFence = false;
+  for (const line of lines) {
+    const isHeading = !inFence && Boolean(getHeading(line));
+    if (!isHeading && line.trim()) return true;
+    if (isFence(line)) inFence = !inFence;
+  }
+  return false;
 }
 
 function splitSectionContent(
   content: string,
-  options: KnowledgeFileSplitOptions,
+  title: string,
+  settings: FastGPTSplitSettings,
 ): string[] {
-  if (content.length <= options.chunkSize) return [content];
+  if (content.length <= settings.chunkSize) return [content];
 
-  const chunks: string[] = [];
-  const overlap = Math.floor(options.chunkSize * options.overlapRatio);
-  let start = 0;
-
-  while (start < content.length) {
-    const remaining = content.length - start;
-    if (remaining <= options.chunkSize) {
-      chunks.push(content.slice(start));
-      break;
-    }
-
-    let end = findSplitEnd(content, start, start + options.chunkSize);
-    const tailLength = content.length - end;
-    if (tailLength > 0 && tailLength < options.chunkSize * 0.8) {
-      end = content.length;
-    }
-
-    chunks.push(content.slice(start, end));
-    if (end >= content.length) break;
-    start = Math.max(start + 1, end - overlap);
+  const contentLines = content.split("\n");
+  let headingLineCount = 0;
+  while (headingLineCount < contentLines.length && getHeading(contentLines[headingLineCount]!)) {
+    headingLineCount += 1;
   }
-
-  return chunks;
+  const headingPrefix = title && headingLineCount
+    ? `${contentLines.slice(0, headingLineCount).join("\n")}\n`
+    : "";
+  const body = headingPrefix ? content.slice(headingPrefix.length) : content;
+  const bodySize = Math.max(1, settings.chunkSize - headingPrefix.length);
+  const bodyChunks = splitTextRecursively(
+    body,
+    bodySize,
+    0,
+    settings.overlapRatio,
+  );
+  return bodyChunks.map((chunk) => headingPrefix + chunk);
 }
 
-function collectSections(rawText: string): KnowledgeFileSection[] {
-  const lines = rawText.split("\n");
-  let inFence = false;
-  let firstBoundaryIndex = -1;
-  for (const [index, line] of lines.entries()) {
-    const heading = inFence ? null : getHeading(line);
-    if (heading?.level === 1 || heading?.level === 2) {
-      firstBoundaryIndex = index;
-      break;
+function splitText2ChunksFastGPT(
+  rawText: string,
+  settings: FastGPTSplitSettings,
+): FastGPTChunk[] {
+  const chunks: FastGPTChunk[] = [];
+  for (const section of collectSections(rawText, settings.paragraphChunkDeep)) {
+    const content = section.lines.join("\n");
+    if (!content.trim() || !hasKnowledgeBody(content)) continue;
+    for (const splitContent of splitSectionContent(content, section.title, settings)) {
+      if (splitContent.trim()) {
+        chunks.push({ content: splitContent, title: section.title });
+        if (chunks.length > KNOWLEDGE_FILE_MAX_CANDIDATES) {
+          throw new KnowledgeFileParseError(
+            "解析结果超过 100 条，请拆分文件或选择更粗的分块方式",
+          );
+        }
+      }
     }
-    if (isFence(line)) inFence = !inFence;
   }
-
-  if (firstBoundaryIndex === -1) {
-    return [{ title: "", lines, boundary: false }];
-  }
-
-  const sections: KnowledgeFileSection[] = [];
-  const preamble = lines.slice(0, firstBoundaryIndex);
-  if (preamble.join("\n").trim()) {
-    sections.push({ title: "", lines: preamble, boundary: false });
-  }
-
-  let current: KnowledgeFileSection | null = null;
-  let currentH1 = "";
-  inFence = false;
-
-  const flush = () => {
-    if (!current) return;
-    sections.push(current);
-    current = null;
-  };
-
-  for (const line of lines.slice(firstBoundaryIndex)) {
-    const heading = inFence ? null : getHeading(line);
-    if (isFence(line)) inFence = !inFence;
-    if (heading?.level === 1) {
-      flush();
-      currentH1 = heading.title;
-      current = { title: currentH1, lines: [line], boundary: true };
-      continue;
-    }
-    if (heading?.level === 2) {
-      flush();
-      current = {
-        title: currentH1 ? `${currentH1} > ${heading.title}` : heading.title,
-        lines: [line],
-        boundary: true,
-      };
-      continue;
-    }
-    if (!current) {
-      current = { title: "", lines: [], boundary: false };
-    }
-    current.lines.push(line);
-  }
-  flush();
-  return sections;
+  return chunks;
 }
 
 export function normalizeKnowledgeDuplicateContent(content: string): string {
@@ -179,33 +430,23 @@ export function splitKnowledgeFile(
   rawText: string,
   options: KnowledgeFileSplitOptions,
 ): KnowledgeFileCandidate[] {
-  if (!Number.isInteger(options.chunkSize) || options.chunkSize <= 0) {
-    throw new KnowledgeFileParseError("每条内容长度必须是正整数");
-  }
-  if (options.overlapRatio < 0 || options.overlapRatio > 0.4) {
-    throw new KnowledgeFileParseError("内容重叠必须在 0% 到 40% 之间");
-  }
-  if (!Number.isInteger(options.maxChunks) || options.maxChunks <= 0) {
-    throw new KnowledgeFileParseError("最大候选数量必须是正整数");
-  }
-
+  const settings = resolveFastGPTSettings(options);
   const normalizedText = normalizeLineEndings(rawText);
+  const chunks = splitText2ChunksFastGPT(normalizedText, settings);
   const candidates: KnowledgeFileCandidate[] = [];
-  for (const section of collectSections(normalizedText)) {
-    const candidate = createSectionCandidate(section);
-    if (!candidate) continue;
-    for (const content of splitSectionContent(candidate.content, options)) {
-      if (!content.trim()) continue;
-      candidates.push({ title: candidate.title, content });
-      if (candidates.length > options.maxChunks) {
-        throw new KnowledgeFileParseError(
-          options.maxChunks < KNOWLEDGE_FILE_MAX_CANDIDATES
-            ? `解析结果超过当前最大候选数量 ${options.maxChunks} 条，请提高上限`
-            : "解析结果超过 100 条，请拆分文件",
-        );
-      }
+
+  for (const chunk of chunks) {
+    if (!hasKnowledgeBody(chunk.content)) continue;
+    candidates.push({ title: chunk.title, content: chunk.content });
+    if (candidates.length > KNOWLEDGE_FILE_MAX_CANDIDATES) {
+      throw new KnowledgeFileParseError(
+        "解析结果超过 100 条，请拆分文件或选择更粗的分块方式",
+      );
     }
   }
 
-  return candidates;
+  if (candidates.length) return candidates;
+  const fallbackContent = normalizedText.trim();
+  if (!fallbackContent || !hasKnowledgeBody(fallbackContent)) return [];
+  return [{ title: "", content: fallbackContent }];
 }

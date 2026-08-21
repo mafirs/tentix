@@ -92,9 +92,12 @@ export function KnowledgeFieldsEditor({
   };
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-5">
       <div className="grid gap-2">
-        <Label htmlFor={`${fieldId}-title`}>标题</Label>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor={`${fieldId}-title`}>标题</Label>
+          <span className="text-xs text-muted-foreground">用于列表显示和召回结果标题</span>
+        </div>
         <Input
           id={`${fieldId}-title`}
           value={value.title}
@@ -105,85 +108,89 @@ export function KnowledgeFieldsEditor({
         <FieldError message={errors?.title} />
       </div>
 
-      <div className="grid gap-2">
-        <Label>正文</Label>
-        <Textarea
-          value={value.content}
-          disabled={disabled}
-          placeholder="填写会返回给 AI 的正式知识内容"
-          className="min-h-[220px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
-          onChange={(event) => update({ content: event.target.value })}
-        />
-        <FieldError message={errors?.content} />
-      </div>
-
-      <div className="grid gap-2">
-        <Label>适用模块</Label>
-        <div className="grid max-h-40 gap-2 overflow-auto rounded-md border border-border p-3 sm:grid-cols-2">
-          {moduleOptions.length ? (
-            moduleOptions.map((item) => (
-              <label key={item.code} className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={value.modules.includes(item.code)}
-                  disabled={disabled}
-                  onCheckedChange={(checked) => {
-                    const modules = checked
-                      ? Array.from(new Set([...value.modules, item.code]))
-                      : value.modules.filter((module) => module !== item.code);
-                    update({ modules });
-                  }}
-                />
-                <span>{item.label}</span>
-                <span className="text-xs text-muted-foreground">{item.code}</span>
-              </label>
-            ))
-          ) : (
-            <span className="text-sm text-muted-foreground">暂无可选模块</span>
-          )}
-        </div>
-        <FieldError message={errors?.modules} />
-      </div>
-
-      <div className="grid gap-2">
-        <Label>知识类型</Label>
-        <Select
-          value={value.category}
-          disabled={disabled}
-          onValueChange={(category) =>
-            update({ category: category as GeneralKnowledgeCategory })
-          }
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="选择知识类型" />
-          </SelectTrigger>
-          <SelectContent>
-            {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
-              <SelectItem key={category} value={category}>
-                {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <FieldError message={errors?.category} />
-      </div>
-
-      {showRevision ? (
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(16rem,0.8fr)]">
         <div className="grid gap-2">
-          <Label htmlFor={`${fieldId}-revision`}>版本</Label>
-          <Input
-            id={`${fieldId}-revision`}
-            value={value.revision}
+          <Label>正文</Label>
+          <Textarea
+            value={value.content}
             disabled={disabled}
-            placeholder="例如：manual-2026-08-20"
-            onChange={(event) => update({ revision: event.target.value })}
+            placeholder="填写会返回给 AI 的正式知识内容"
+            className="min-h-[360px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
+            onChange={(event) => update({ content: event.target.value })}
           />
-          <FieldError message={errors?.revision} />
+          <FieldError message={errors?.content} />
         </div>
-      ) : null}
+
+        <div className="grid content-start gap-4 rounded-lg border border-border bg-muted/20 p-4">
+          <div className="grid gap-2">
+            <Label>适用模块</Label>
+            <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">
+              {moduleOptions.length ? (
+                moduleOptions.map((item) => (
+                  <label key={item.code} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={value.modules.includes(item.code)}
+                      disabled={disabled}
+                      onCheckedChange={(checked) => {
+                        const modules = checked
+                          ? Array.from(new Set([...value.modules, item.code]))
+                          : value.modules.filter((module) => module !== item.code);
+                        update({ modules });
+                      }}
+                    />
+                    <span>{item.label}</span>
+                    <span className="text-xs text-muted-foreground">{item.code}</span>
+                  </label>
+                ))
+              ) : (
+                <span className="text-sm text-muted-foreground">暂无可选模块</span>
+              )}
+            </div>
+            <FieldError message={errors?.modules} />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>知识类型</Label>
+            <Select
+              value={value.category}
+              disabled={disabled}
+              onValueChange={(category) =>
+                update({ category: category as GeneralKnowledgeCategory })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择知识类型" />
+              </SelectTrigger>
+              <SelectContent>
+                {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
+                  <SelectItem key={category} value={category}>
+                    {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError message={errors?.category} />
+          </div>
+
+          {showRevision ? (
+            <div className="grid gap-2">
+              <Label htmlFor={`${fieldId}-revision`}>版本</Label>
+              <Input
+                id={`${fieldId}-revision`}
+                value={value.revision}
+                disabled={disabled}
+                placeholder="例如：manual-2026-08-20"
+                onChange={(event) => update({ revision: event.target.value })}
+              />
+              <FieldError message={errors?.revision} />
+            </div>
+          ) : null}
+        </div>
+      </div>
 
       {showIndexFields ? (
-        <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="grid gap-3 rounded-lg border border-border p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-sm font-medium">召回索引</p>
               <p className="text-xs text-muted-foreground">最多填写三条，可留空</p>
@@ -216,25 +223,27 @@ export function KnowledgeFieldsEditor({
               </div>
             ) : null}
           </div>
-          {[0, 1, 2].map((index) => (
-            <div key={index} className="grid gap-2">
-              <Label htmlFor={`${fieldId}-index-${index}`}>
-                召回索引 {index + 1}
-              </Label>
-              <Input
-                id={`${fieldId}-index-${index}`}
-                value={value.indexes[index] ?? ""}
-                disabled={disabled}
-                placeholder="用户可能的问法，可留空"
-                onChange={(event) => {
-                  const indexes = [...value.indexes];
-                  indexes[index] = event.target.value;
-                  update({ indexes });
-                }}
-              />
-              <FieldError message={errors?.indexes?.[index]} />
-            </div>
-          ))}
+          <div className="grid gap-3 lg:grid-cols-3">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="grid gap-2">
+                <Label htmlFor={`${fieldId}-index-${index}`}>
+                  召回索引 {index + 1}
+                </Label>
+                <Input
+                  id={`${fieldId}-index-${index}`}
+                  value={value.indexes[index] ?? ""}
+                  disabled={disabled}
+                  placeholder="用户可能的问法，可留空"
+                  onChange={(event) => {
+                    const indexes = [...value.indexes];
+                    indexes[index] = event.target.value;
+                    update({ indexes });
+                  }}
+                />
+                <FieldError message={errors?.indexes?.[index]} />
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </div>
