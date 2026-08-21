@@ -12,6 +12,7 @@ import {
   type KnowledgeFieldErrors,
   type KnowledgeFieldValues,
 } from "@comp/staff/knowledge-base/knowledge-fields-editor";
+import { useTranslation } from "i18n";
 import { useRef, useState } from "react";
 import {
   Badge,
@@ -79,6 +80,11 @@ function getResponseMessage(data: unknown, fallback: string): string {
 async function getErrorMessage(response: Response, fallback: string): Promise<string> {
   const data = await response.json().catch(() => ({}));
   return getResponseMessage(data, fallback);
+}
+
+function getThrownErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return getResponseMessage(error, fallback);
 }
 
 function normalizeDuplicateContent(content: string): string {
@@ -159,6 +165,7 @@ export function FileImportDialog({
   moduleOptions,
   onImported,
 }: FileImportDialogProps) {
+  const { t } = useTranslation();
   const fileFingerprints = useRef(new Map<string, string>());
   const fileReadVersion = useRef(0);
   const [file, setFile] = useState<File | null>(null);
@@ -410,7 +417,9 @@ export function FileImportDialog({
       setSelectedCandidateId(candidatesWithDuplicates[0]?.candidateId ?? "");
       setActiveStep("preview");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "文件解析失败");
+      setErrorMessage(
+        getThrownErrorMessage(error, t("knowledge_file_parse_failed")),
+      );
       setCandidates([]);
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");

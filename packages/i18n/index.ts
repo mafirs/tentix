@@ -342,6 +342,7 @@ export const translations = {
       // File upload and error messages
       file_upload_failed: "File upload failed",
       file_upload_error: "An error occurred during file upload",
+      knowledge_file_parse_failed: "File parsing failed",
       uploading_files: "Uploading files {{uploaded}}/{{total}}",
       unknown_submit_error: "An unknown error occurred during submission",
       history_navigation_failed:
@@ -913,6 +914,7 @@ export const translations = {
       // File upload and error messages
       file_upload_failed: "文件上传失败",
       file_upload_error: "文件上传时出现错误",
+      knowledge_file_parse_failed: "文件解析失败",
       uploading_files: "正在上传文件 {{uploaded}}/{{total}}",
       unknown_submit_error: "提交时出现未知错误",
       history_navigation_failed: "历史导航失败，回退到默认路由",
