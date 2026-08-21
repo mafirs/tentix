@@ -63,6 +63,11 @@ type ImportProgress = {
   completed: number;
 };
 
+type IndexProgress = {
+  total: number;
+  completed: number;
+};
+
 function getResponseMessage(data: unknown, fallback: string): string {
   if (typeof data === "object" && data !== null && "message" in data) {
     const message = data.message;
@@ -187,6 +192,9 @@ export function FileImportDialog({
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] =
     useState<ImportProgress | null>(null);
+  const [isGeneratingIndexes, setIsGeneratingIndexes] = useState(false);
+  const [indexProgress, setIndexProgress] =
+    useState<IndexProgress | null>(null);
 
   const selectedCandidate =
     candidates.find((item) => item.candidateId === selectedCandidateId) ??
@@ -229,6 +237,7 @@ export function FileImportDialog({
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
       setImportProgress(null);
+      setIndexProgress(null);
       setIsReadingFile(false);
       return;
     }
@@ -242,6 +251,7 @@ export function FileImportDialog({
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
       setImportProgress(null);
+      setIndexProgress(null);
       setIsReadingFile(false);
       return;
     }
@@ -256,6 +266,7 @@ export function FileImportDialog({
     setSelectedCandidateIds([]);
     setSelectedCandidateId("");
     setImportProgress(null);
+    setIndexProgress(null);
 
     try {
       const fingerprint = await getFileFingerprint(nextFile);
@@ -320,6 +331,7 @@ export function FileImportDialog({
     }
 
     setImportProgress(null);
+    setIndexProgress(null);
     setIsParsing(true);
     setErrorMessage("");
     try {
@@ -424,6 +436,9 @@ export function FileImportDialog({
   };
 
   const goToConfirm = () => {
+    if (isGeneratingIndexes) {
+      return;
+    }
     const selected = candidates.filter((candidate) =>
       selectedCandidateIds.includes(candidate.candidateId),
     );
@@ -439,14 +454,25 @@ export function FileImportDialog({
     setActiveStep("confirm");
   };
 
-  const generateIndexes = async (items: FileImportCandidate[]) => {
+  const generateIndexes = async (
+    items: FileImportCandidate[],
+    trackProgress = false,
+  ) => {
     const validation = items.map((candidate) => ({
       candidate,
       errors: validateCandidate(candidate),
     }));
+    const invalidItems = validation.filter((item) => item.errors);
     const validItems = validation
       .filter((item) => !item.errors)
       .map((item) => item.candidate);
+    if (trackProgress) {
+      setIndexProgress({
+        total: items.length,
+        completed: invalidItems.length,
+      });
+      setIsGeneratingIndexes(true);
+    }
     setCandidates((current) =>
       current.map((candidate) => {
         const itemValidation = validation.find(
@@ -471,56 +497,74 @@ export function FileImportDialog({
       }),
     );
 
-    await runWithConcurrency(validItems, 2, async (candidate) => {
-      try {
-        const response = await apiClient.kb.admin["general-knowledge"].indexes.generate.$post(
-          {
-            json: {
-              title: candidate.title,
-              modules: candidate.modules,
-              category: candidate.category as GeneralKnowledgeCategory,
-              content: candidate.content,
+    try {
+      await runWithConcurrency(validItems, 2, async (candidate) => {
+        try {
+          const response = await apiClient.kb.admin["general-knowledge"].indexes.generate.$post(
+            {
+              json: {
+                title: candidate.title,
+                modules: candidate.modules,
+                category: candidate.category as GeneralKnowledgeCategory,
+                content: candidate.content,
+              },
             },
-          },
-          { fetch: kbIndexGenerateFetch },
-        );
-        if (!response.ok) {
-          throw new Error(await getErrorMessage(response, "召回索引生成失败"));
+            { fetch: kbIndexGenerateFetch },
+          );
+          if (!response.ok) {
+            throw new Error(await getErrorMessage(response, "召回索引生成失败"));
+          }
+          const result = await response.json();
+          setCandidates((current) =>
+            current.map((item) => {
+              if (item.candidateId !== candidate.candidateId) return item;
+              const indexes = [...item.indexes];
+              let nextIndex = 0;
+              for (let index = 0; index < MAX_INDEXES && nextIndex < result.data.indexes.length; index += 1) {
+                if (indexes[index]?.trim()) continue;
+                indexes[index] = result.data.indexes[nextIndex]!;
+                nextIndex += 1;
+              }
+              return { ...item, indexes, indexStatus: "success" as const };
+            }),
+          );
+        } catch (error) {
+          setCandidates((current) =>
+            current.map((item) =>
+              item.candidateId === candidate.candidateId
+                ? {
+                    ...item,
+                    indexStatus: "failed" as const,
+                    error: error instanceof Error ? error.message : "召回索引生成失败",
+                  }
+                : item,
+            ),
+          );
+        } finally {
+          if (trackProgress) {
+            setIndexProgress((current) =>
+              current
+                ? {
+                    ...current,
+                    completed: Math.min(current.completed + 1, current.total),
+                  }
+                : current,
+            );
+          }
         }
-        const result = await response.json();
-        setCandidates((current) =>
-          current.map((item) => {
-            if (item.candidateId !== candidate.candidateId) return item;
-            const indexes = [...item.indexes];
-            let nextIndex = 0;
-            for (let index = 0; index < MAX_INDEXES && nextIndex < result.data.indexes.length; index += 1) {
-              if (indexes[index]?.trim()) continue;
-              indexes[index] = result.data.indexes[nextIndex]!;
-              nextIndex += 1;
-            }
-            return { ...item, indexes, indexStatus: "success" as const };
-          }),
-        );
-      } catch (error) {
-        setCandidates((current) =>
-          current.map((item) =>
-            item.candidateId === candidate.candidateId
-              ? {
-                  ...item,
-                  indexStatus: "failed" as const,
-                  error: error instanceof Error ? error.message : "召回索引生成失败",
-                }
-              : item,
-          ),
-        );
+      });
+    } finally {
+      if (trackProgress) {
+        setIsGeneratingIndexes(false);
       }
-    });
+    }
   };
 
   const handleGenerateIndexes = () => {
-    void generateIndexes(
-      candidates.filter((candidate) => getSelectedIds().includes(candidate.candidateId)),
+    const selected = candidates.filter((candidate) =>
+      getSelectedIds().includes(candidate.candidateId),
     );
+    void generateIndexes(selected, true);
   };
 
   const handleImport = async (requestedCandidates?: FileImportCandidate[]) => {
@@ -678,6 +722,13 @@ export function FileImportDialog({
           Math.round((importProgress.completed / importProgress.total) * 100),
         )
       : 0;
+  const indexProgressValue =
+    indexProgress && indexProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round((indexProgress.completed / indexProgress.total) * 100),
+        )
+      : 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -707,6 +758,7 @@ export function FileImportDialog({
               <button
                 key={step}
                 type="button"
+                disabled={step === "confirm" && isGeneratingIndexes}
                 className={`border-t-2 px-1 pt-2 text-left text-xs ${activeStep === step ? "border-primary text-foreground" : "border-border text-muted-foreground"}`}
                 onClick={() => {
                   if (step === "confirm") {
@@ -963,7 +1015,7 @@ export function FileImportDialog({
                           </div>
                         ) : null}
                         {candidate.indexStatus === "failed" ? (
-                          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void generateIndexes([candidate])}>重试索引</Button>
+                          <Button type="button" size="sm" variant="outline" className="mt-2" disabled={isGeneratingIndexes} onClick={() => void generateIndexes([candidate])}>重试索引</Button>
                         ) : null}
                         {candidate.importStatus === "failed" ? (
                           <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>重试导入</Button>
@@ -1001,11 +1053,26 @@ export function FileImportDialog({
                     <p className="text-xs text-muted-foreground">批量设置只作用于当前勾选的候选。</p>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>待处理 {pendingCount}</span>
-                    <span>成功 {successCount}</span>
-                    <span>失败 {failedCount}</span>
+                    <span>导入待处理 {pendingCount}</span>
+                    <span>导入成功 {successCount}</span>
+                    <span>导入失败 {failedCount}</span>
                   </div>
                 </div>
+                {indexProgress ? (
+                  <div className="grid gap-2">
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{isGeneratingIndexes ? "索引生成中" : "索引处理完成"}</span>
+                      <span>
+                        {indexProgress.completed} / {indexProgress.total}
+                      </span>
+                    </div>
+                    <Progress
+                      value={indexProgressValue}
+                      aria-label="索引生成进度"
+                      className="h-2"
+                    />
+                  </div>
+                ) : null}
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto]">
                   <div className="grid gap-2">
                     <Label>批量设置模块</Label>
@@ -1038,8 +1105,8 @@ export function FileImportDialog({
               <div className="flex justify-between gap-3">
                 <Button type="button" variant="outline" onClick={() => setActiveStep("settings")}>返回参数设置</Button>
                 <div className="flex gap-2">
-                  <Button type="button" variant="outline" disabled={isParsing || isImporting || !candidates.length} onClick={handleGenerateIndexes}>一键生成索引</Button>
-                  <Button type="button" disabled={isParsing || isImporting} onClick={goToConfirm}>下一步：确认导入</Button>
+                  <Button type="button" variant="outline" disabled={isParsing || isImporting || isGeneratingIndexes || !selectedCount} onClick={handleGenerateIndexes}>{isGeneratingIndexes ? "索引生成中" : "一键生成索引"}</Button>
+                  <Button type="button" disabled={isParsing || isImporting || isGeneratingIndexes} onClick={goToConfirm}>下一步：确认导入</Button>
                 </div>
               </div>
             </section>
