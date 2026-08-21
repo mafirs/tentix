@@ -124,10 +124,10 @@ export function KnowledgeFieldsEditor({
         <div className="grid content-start gap-4 rounded-lg border border-border bg-muted/20 p-4">
           <div className="grid gap-2">
             <Label>适用模块</Label>
-            <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">
+            <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3">
               {moduleOptions.length ? (
                 moduleOptions.map((item) => (
-                  <label key={item.code} className="flex items-center gap-2 text-sm">
+                  <label key={item.code} className="flex min-w-0 items-center gap-2 text-sm">
                     <Checkbox
                       checked={value.modules.includes(item.code)}
                       disabled={disabled}
@@ -138,8 +138,8 @@ export function KnowledgeFieldsEditor({
                         update({ modules });
                       }}
                     />
-                    <span>{item.label}</span>
-                    <span className="text-xs text-muted-foreground">{item.code}</span>
+                    <span className="min-w-0">{item.label}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{item.code}</span>
                   </label>
                 ))
               ) : (

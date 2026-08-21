@@ -184,8 +184,10 @@ export function FileImportDialog({
     candidates.find((item) => item.candidateId === selectedCandidateId) ??
     candidates[0] ??
     null;
-  const availableModuleOptions = moduleOptions.filter((item) =>
-    defaultModules.includes(item.code),
+  const availableModuleOptions = [...moduleOptions].sort(
+    (left, right) =>
+      Number(defaultModules.includes(right.code)) -
+      Number(defaultModules.includes(left.code)),
   );
 
   const setCandidateValues = (candidateId: string, value: KnowledgeFieldValues) => {
@@ -280,7 +282,7 @@ export function FileImportDialog({
       return;
     }
     if (!defaultModules.length) {
-      setErrorMessage("请先选择本次导入可使用的工单模块");
+      setErrorMessage("请先选择默认工单模块");
       return;
     }
     if (!defaultCategory) {
@@ -330,7 +332,7 @@ export function FileImportDialog({
       const parsedCandidates = result.data.candidates.map((candidate) => ({
         title: candidate.title,
         content: candidate.content,
-        modules: [],
+        modules: [...defaultModules],
         category: defaultCategory,
         revision: `file-${new Date().toISOString().slice(0, 10)}`,
         indexes: [],
@@ -687,7 +689,7 @@ export function FileImportDialog({
                 </div>
                 {fileWarning ? <p className="text-sm text-amber-600">{fileWarning}</p> : null}
                 <div className="grid gap-2">
-                  <Label>本次可用工单模块</Label>
+                  <Label>默认工单模块</Label>
                   <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">
                     {moduleOptions.map((item) => (
                       <label key={item.code} className="flex items-center gap-2 text-sm">
@@ -824,7 +826,7 @@ export function FileImportDialog({
           ) : null}
 
           {activeStep === "preview" ? (
-            <section className="grid gap-4">
+            <section className="grid min-h-0 gap-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold">候选知识审核</h3>
@@ -838,8 +840,8 @@ export function FileImportDialog({
                   <Badge variant="outline">最多 100 条</Badge>
                 </div>
               </div>
-              <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-                <div className="grid content-start gap-2">
+              <div className="grid gap-4 lg:h-[min(32rem,calc(100vh-24rem))] lg:min-h-0 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+                <div className="grid min-h-0 min-w-0 content-start gap-2 overflow-hidden rounded-lg border border-border bg-muted/20 p-3">
                   <label className="flex items-center gap-2 text-sm">
                     <Checkbox
                       checked={candidates.length > 0 && selectedCount === candidates.length}
@@ -849,65 +851,67 @@ export function FileImportDialog({
                     />
                     全选候选
                   </label>
-                  {candidates.map((candidate, index) => (
-                    <div
-                      key={candidate.candidateId}
-                      className={`rounded-lg border p-3 text-left ${selectedCandidate?.candidateId === candidate.candidateId ? "border-primary bg-primary/5" : "border-border"}`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <Checkbox
-                          checked={selectedCandidateIds.includes(candidate.candidateId)}
-                          onCheckedChange={(checked) => toggleCandidate(candidate.candidateId, checked === true)}
-                        />
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 text-left"
-                          onClick={() => setSelectedCandidateId(candidate.candidateId)}
-                        >
-                          <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || "未填写标题"}</span>
-                          <span className="mt-1 flex flex-wrap gap-1">
-                            <Badge variant="outline">{candidate.indexStatus === "success" ? "索引完成" : candidate.indexStatus === "failed" ? "索引失败" : "索引待处理"}</Badge>
-                            <Badge variant={candidate.importStatus === "success" ? "default" : "outline"}>
-                              {candidate.importStatus === "success" ? "已导入" : candidate.importStatus === "failed" ? "导入失败" : candidate.importStatus === "skipped" ? "已跳过" : "待导入"}
-                            </Badge>
-                          </span>
-                          {candidate.error ? <span className="mt-1 block text-xs text-destructive">{candidate.error}</span> : null}
-                        </button>
-                      </div>
-                      {candidate.duplicate !== "none" ? (
-                        <div className="mt-2 grid gap-2 text-xs text-amber-700">
-                          <span>{candidate.duplicate === "current" ? "与当前文件中的其他候选正文重复" : "与已有知识正文重复"}</span>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={candidate.duplicateAction === "skip" ? "default" : "outline"}
-                              onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "skip" as const } : item))}
-                            >
-                              跳过
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={candidate.duplicateAction === "continue" ? "default" : "outline"}
-                              onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "continue" as const } : item))}
-                            >
-                              继续导入
-                            </Button>
-                          </div>
+                  <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
+                    {candidates.map((candidate, index) => (
+                      <div
+                        key={candidate.candidateId}
+                        className={`min-w-0 rounded-lg border p-3 text-left ${selectedCandidate?.candidateId === candidate.candidateId ? "border-primary bg-primary/5" : "border-border bg-background"}`}
+                      >
+                        <div className="flex min-w-0 items-start gap-2">
+                          <Checkbox
+                            checked={selectedCandidateIds.includes(candidate.candidateId)}
+                            onCheckedChange={(checked) => toggleCandidate(candidate.candidateId, checked === true)}
+                          />
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => setSelectedCandidateId(candidate.candidateId)}
+                          >
+                            <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || "未填写标题"}</span>
+                            <span className="mt-1 flex flex-wrap gap-1">
+                              <Badge variant="outline">{candidate.indexStatus === "success" ? "索引完成" : candidate.indexStatus === "failed" ? "索引失败" : "索引待处理"}</Badge>
+                              <Badge variant={candidate.importStatus === "success" ? "default" : "outline"}>
+                                {candidate.importStatus === "success" ? "已导入" : candidate.importStatus === "failed" ? "导入失败" : candidate.importStatus === "skipped" ? "已跳过" : "待导入"}
+                              </Badge>
+                            </span>
+                            {candidate.error ? <span className="mt-1 block text-xs text-destructive">{candidate.error}</span> : null}
+                          </button>
                         </div>
-                      ) : null}
-                      {candidate.indexStatus === "failed" ? (
-                        <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void generateIndexes([candidate])}>重试索引</Button>
-                      ) : null}
-                      {candidate.importStatus === "failed" ? (
-                        <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>重试导入</Button>
-                      ) : null}
-                    </div>
-                  ))}
+                        {candidate.duplicate !== "none" ? (
+                          <div className="mt-2 grid gap-2 text-xs text-amber-700">
+                            <span>{candidate.duplicate === "current" ? "与当前文件中的其他候选正文重复" : "与已有知识正文重复"}</span>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={candidate.duplicateAction === "skip" ? "default" : "outline"}
+                                onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "skip" as const } : item))}
+                              >
+                                跳过
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={candidate.duplicateAction === "continue" ? "default" : "outline"}
+                                onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "continue" as const } : item))}
+                              >
+                                继续导入
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {candidate.indexStatus === "failed" ? (
+                          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void generateIndexes([candidate])}>重试索引</Button>
+                        ) : null}
+                        {candidate.importStatus === "failed" ? (
+                          <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>重试导入</Button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="min-w-0">
+                <div className="min-h-0 min-w-0 overflow-y-auto pr-1">
                   {selectedCandidate ? (
                     <>
                       <KnowledgeFieldsEditor
