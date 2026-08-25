@@ -38,7 +38,6 @@ import {
 import { useToast } from "uisrc/hooks/use-toast.ts";
 import { useEffect, useMemo, useRef, useCallback } from "react";
 import { useThrottle } from "./use-throttle.ts";
-import i18n from "i18n";
 
 export interface UseMinimalTiptapEditorProps extends UseEditorOptions {
   value?: Content;
@@ -61,23 +60,23 @@ type FileUploadErrorReason =
   | "base64NotAllowed";
 
 const fileUploadErrorMapping: Record<FileUploadErrorReason, string> = {
-  type: "attachment_file_type_error",
-  size: "attachment_file_size_error",
-  invalidBase64: "attachment_file_not_image",
-  base64NotAllowed: "attachment_file_not_image",
+  type: "文件类型不允许！",
+  size: "文件太大！",
+  invalidBase64: "文件不是图片！",
+  base64NotAllowed: "文件不是图片！",
 } as const;
 
 const getFileUploadErrorMessage = (error: FileError): string => {
   if (error.file instanceof File && error.file.type.startsWith("video/")) {
     if (error.reason === "size") {
       const sizeInMb = Math.ceil(error.file.size / (1024 * 1024));
-      return i18n.t("attachment_video_size_error", { size: sizeInMb });
+      return `视频大小为 ${sizeInMb} MB，超过 50 MB 上限，请压缩后重试`;
     }
     if (error.reason === "type") {
-      return i18n.t("attachment_mp4_only");
+      return "仅支持 MP4 视频文件";
     }
   }
-  return i18n.t(fileUploadErrorMapping[error.reason]);
+  return fileUploadErrorMapping[error.reason];
 };
 
 const mergePastedContentWithLocalMedia = (
@@ -110,7 +109,7 @@ const mergePastedContentWithLocalMedia = (
 };
 
 const createExtensions = (
-  getPlaceholder: () => string,
+  placeholder: string,
   toast: (...args: any[]) => void,
 ) => [
   StarterKit.configure({
@@ -140,7 +139,7 @@ const createExtensions = (
     maxFileSize: 5 * 1024 * 1024,
     onValidationError(errors) {
       toast({
-        title: i18n.t("image_validation_error"),
+        title: "图片验证错误",
         description: errors
           .map(getFileUploadErrorMessage)
           .join(", "),
@@ -153,7 +152,7 @@ const createExtensions = (
     maxFileSize: VIDEO_MAX_SIZE,
     onValidationError(errors) {
       toast({
-        title: i18n.t("video_validation_error"),
+        title: "视频验证错误",
         description: errors.map(getFileUploadErrorMessage).join(", "),
         variant: "destructive",
       });
@@ -163,13 +162,13 @@ const createExtensions = (
     allowedMimeTypes: [...ATTACHMENT_MIME_TYPES],
     maxFileSize: getAttachmentMaxSize,
     onValidationError: (errors) => toast({
-      title: i18n.t("file_validation_error"),
+      title: "文件验证错误",
       description: errors.map(getFileUploadErrorMessage).join(", "),
       variant: "destructive",
     }),
-    onLimitError: ({ key, params }) => toast({
-      title: i18n.t("attachment_limit_exceeded"),
-      description: i18n.t(key, params),
+    onLimitError: (message) => toast({
+      title: "附件数量或大小超限",
+      description: message,
       variant: "destructive",
     }),
   }),
@@ -275,7 +274,7 @@ const createExtensions = (
     },
     onValidationError: (errors) => {
       toast({
-        title: i18n.t("file_validation_error"),
+        title: "文件验证错误",
         description: errors
           .map(getFileUploadErrorMessage)
           .join(", "),
@@ -291,7 +290,7 @@ const createExtensions = (
   UnsetAllMarks,
   HorizontalRule,
   CodeBlockLowlight,
-  Placeholder.configure({ placeholder: getPlaceholder }),
+  Placeholder.configure({ placeholder: () => placeholder }),
 ];
 
 export const useMinimalTiptapEditor = ({
@@ -307,8 +306,6 @@ export const useMinimalTiptapEditor = ({
   editorProps: externalEditorProps,
   ...props
 }: UseMinimalTiptapEditorProps) => {
-  const placeholderRef = useRef(placeholder);
-  placeholderRef.current = placeholder;
   const { toast } = useToast();
 
   // 🎯 使用 useRef 避免闭包问题
@@ -371,7 +368,7 @@ export const useMinimalTiptapEditor = ({
     };
 
     const baseConfig: UseEditorOptions = {
-      extensions: createExtensions(() => placeholderRef.current, toast),
+      extensions: createExtensions(placeholder, toast),
       editorProps: mergedEditorProps, // 🔥 使用合并后的 editorProps
       onUpdate: ({ editor }: { editor: Editor }) => handleUpdate(editor),
       onCreate: ({ editor }: { editor: Editor }) => handleCreate(editor),
@@ -396,6 +393,7 @@ export const useMinimalTiptapEditor = ({
 
     return baseConfig;
   }, [
+    placeholder,
     toast,
     enablePerformanceMode,
     isSSR,
@@ -408,11 +406,6 @@ export const useMinimalTiptapEditor = ({
   ]);
 
   const editor = useEditor(editorConfig);
-
-  useEffect(() => {
-    if (!editor) return;
-    editor.view.dispatch(editor.state.tr.setMeta("i18n", true));
-  }, [editor, placeholder]);
 
   // 🎯 处理组件卸载时的 Blob URL 清理
   useEffect(() => {

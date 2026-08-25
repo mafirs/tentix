@@ -303,7 +303,6 @@ function useTicketCreation() {
           // 处理文件上传
           uploadResult = await processFilesAndUpload(
             formData.description,
-            t,
             (progress) => setUploadProgress(progress),
           );
 

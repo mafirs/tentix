@@ -1,7 +1,6 @@
 import type { Editor } from "@tiptap/react";
 import type { VariantProps } from "class-variance-authority";
 import { useRef, useState, type ChangeEvent } from "react";
-import { useTranslation } from "i18n";
 import {
   FileTextIcon,
   ImageIcon,
@@ -28,9 +27,9 @@ export const AttachmentEditDialog = ({
   size,
   variant,
 }: AttachmentEditDialogProps) => {
-  const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
+  const genericFormats = "PDF、DOCX、XLSX、CSV、PPTX、TXT、JSON、XML、MD、YAML、YML、TOML、LOG、ZIP";
 
   const handleSelectFiles = () => {
     inputRef.current?.click();
@@ -69,39 +68,39 @@ export const AttachmentEditDialog = ({
                 <PaperclipIcon className="size-4" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium">{t("attachment_supported_files")}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{t("attachment_input_hint")}</p>
+                <p className="text-sm font-medium">支持上传的文件</p>
+                <p className="mt-1 text-xs text-muted-foreground">选择文件后会加入当前输入框</p>
               </div>
             </div>
             <div className="space-y-3 text-xs">
               <div className="flex gap-3">
                 <ImageIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div>
-                  <p className="font-medium">{t("attachment_images")}</p>
-                  <p className="mt-1 text-muted-foreground">{t("attachment_image_limit")}</p>
+                  <p className="font-medium">图片</p>
+                  <p className="mt-1 text-muted-foreground">PNG、JPG、GIF、WEBP 等常见图片格式，单个不超过 5 MB</p>
                 </div>
               </div>
               <div className="flex gap-3">
                 <VideoIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div>
-                  <p className="font-medium">{t("attachment_videos")}</p>
-                  <p className="mt-1 text-muted-foreground">{t("attachment_video_limit")}</p>
+                  <p className="font-medium">视频</p>
+                  <p className="mt-1 text-muted-foreground">MP4，单个不超过 50 MB</p>
                 </div>
               </div>
               <div className="flex gap-3">
                 <FileTextIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0">
-                  <p className="font-medium">{t("attachment_generic_files")}</p>
-                  <p className="mt-1 break-words text-muted-foreground">{t("attachment_generic_formats")}</p>
-                  <p className="mt-1 text-muted-foreground">{t("attachment_generic_size_limit")}</p>
+                  <p className="font-medium">普通附件</p>
+                  <p className="mt-1 break-words text-muted-foreground">{genericFormats}</p>
+                  <p className="mt-1 text-muted-foreground">普通附件单个不超过 25 MB；ZIP 单个不超过 50 MB</p>
                 </div>
               </div>
             </div>
             <div className="mt-4 border-t pt-3">
-              <p className="mb-3 text-xs text-muted-foreground">{t("attachment_message_limit", { count: 5, size: "50 MB" })}</p>
+              <p className="mb-3 text-xs text-muted-foreground">单条消息最多 5 个普通附件，总大小不超过 50 MB</p>
               <Button type="button" className="w-full" onClick={handleSelectFiles}>
                 <UploadIcon className="size-4" />
-                {t("attachment_choose_file")}
+                选择文件
               </Button>
             </div>
           </div>

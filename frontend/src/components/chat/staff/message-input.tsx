@@ -113,7 +113,6 @@ export function StaffMessageInput({
     async (content: JSONContentZod): Promise<UploadResult> => {
       const result = await processFilesAndUpload(
         content,
-        t,
         (progress) => setUploadProgress(progress),
       );
 
@@ -121,7 +120,7 @@ export function StaffMessageInput({
 
       return result;
     },
-    [t],
+    [],
   );
 
   // 处理消息提交（从编辑器读取最新内容，避免节流/合成态导致的旧值）

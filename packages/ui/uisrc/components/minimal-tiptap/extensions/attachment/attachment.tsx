@@ -69,10 +69,7 @@ export function isGenericAttachmentMimeType(fileType: string): boolean {
 
 interface AttachmentOptions extends Omit<FileValidationOptions, "allowBase64"> {
   onValidationError?: (errors: FileError[]) => void;
-  onLimitError?: (error: {
-    key: "attachment_limit_count" | "attachment_limit_size";
-    params: { count?: number; size?: string };
-  }) => void;
+  onLimitError?: (message: string) => void;
 }
 
 declare module "@tiptap/core" {
@@ -124,17 +121,11 @@ export const Attachment = Node.create<AttachmentOptions>({
         );
         const incomingSize = validFiles.reduce((total, file) => total + file.size, 0);
         if (currentAttachments.length + validFiles.length > ATTACHMENT_MAX_COUNT) {
-          this.options.onLimitError?.({
-            key: "attachment_limit_count",
-            params: { count: ATTACHMENT_MAX_COUNT },
-          });
+          this.options.onLimitError?.("单条消息最多添加 5 个附件");
           return false;
         }
         if (currentSize + incomingSize > ATTACHMENT_MAX_TOTAL_SIZE) {
-          this.options.onLimitError?.({
-            key: "attachment_limit_size",
-            params: { size: "50 MB" },
-          });
+          this.options.onLimitError?.("单条消息附件总大小不能超过 50 MB");
           return false;
         }
         if (validFiles.length === 0) return false;
