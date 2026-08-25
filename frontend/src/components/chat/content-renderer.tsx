@@ -1,4 +1,5 @@
 import { type ReactNode, useMemo } from "react";
+import { useTranslation } from "i18n";
 import { type JSONContent } from "@tiptap/react";
 import { DownloadIcon, FileTextIcon } from "lucide-react";
 import { PhotoProvider, PhotoView } from "react-photo-view";
@@ -77,6 +78,7 @@ export const RenderContent = ({
 }: {
   content: JSONContent;
 }): ReactNode => {
+  const { t } = useTranslation();
   if (!content) return null;
 
   if (content.type === "doc") {
@@ -318,8 +320,8 @@ export const RenderContent = ({
             download={fileName}
             target="_blank"
             rel="noreferrer"
-            aria-label={`下载 ${fileName}`}
-            title={`下载 ${fileName}`}
+            aria-label={t("download_file", { fileName })}
+            title={t("download_file", { fileName })}
           >
             <DownloadIcon className="size-4" />
           </a>

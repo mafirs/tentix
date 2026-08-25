@@ -13,6 +13,7 @@ import {
 } from "tentix-ui";
 import { ChevronsUpDown, Check } from "lucide-react";
 import { cn } from "@lib/utils";
+import { useTranslation } from "i18n";
 
 export type CommonComboboxProps<OptionType> = {
   options: OptionType[];
@@ -32,20 +33,24 @@ export type CommonComboboxProps<OptionType> = {
 export function CommonCombobox<OptionType>(
   props: CommonComboboxProps<OptionType>,
 ) {
+  const { t } = useTranslation();
   const {
     options,
     value,
     onChange,
     disabled = false,
-    placeholder = "请选择",
-    searchPlaceholder = "搜索...",
-    noneLabel = "不选择",
+    placeholder,
+    searchPlaceholder,
+    noneLabel,
     showNoneOption = true,
     getOptionId,
     getOptionLabel,
     getOptionDescription,
     className,
   } = props;
+  const resolvedPlaceholder = placeholder ?? t("combobox_select");
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t("combobox_search");
+  const resolvedNoneLabel = noneLabel ?? t("combobox_none");
 
   const [open, setOpen] = useState(false);
 
@@ -63,15 +68,15 @@ export function CommonCombobox<OptionType>(
           disabled={disabled}
           className={cn("w-full justify-between bg-transparent", className)}
         >
-          {selected ? getOptionLabel(selected) : placeholder}
+          {selected ? getOptionLabel(selected) : resolvedPlaceholder}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
         <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+          <CommandInput placeholder={resolvedSearchPlaceholder} />
           <CommandList>
-            <CommandEmpty>未找到匹配项</CommandEmpty>
+            <CommandEmpty>{t("combobox_no_match")}</CommandEmpty>
             <CommandGroup>
               {showNoneOption ? (
                 <CommandItem
@@ -87,7 +92,7 @@ export function CommonCombobox<OptionType>(
                       !selected ? "opacity-100" : "opacity-0",
                     )}
                   />
-                  {noneLabel}
+                  {resolvedNoneLabel}
                 </CommandItem>
               ) : null}
               {options.map((option) => {

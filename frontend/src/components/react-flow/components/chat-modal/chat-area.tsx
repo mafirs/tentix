@@ -11,6 +11,7 @@ import { type Message } from "@comp/ai-chat/chat-message";
 import { CopyButton } from "@comp/common/copy-button";
 import { MessageInput } from "./message-input";
 import type { JSONContent } from "@tiptap/react";
+import i18n, { useTranslation } from "i18n";
 
 interface ChatAreaProps {
   hasTickets: boolean;
@@ -39,11 +40,12 @@ function EmptyState({ icon, title, description }: EmptyStateProps) {
 
 // 加载状态组件
 function LoadingState() {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 flex items-center justify-center bg-background">
       <div className="text-center space-y-4">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto" />
-        <p className="text-sm text-muted-foreground">加载中...</p>
+        <p className="text-sm text-muted-foreground">{t("loading")}</p>
       </div>
     </div>
   );
@@ -52,6 +54,7 @@ function LoadingState() {
 export function ChatArea({ hasTickets }: ChatAreaProps) {
   const { id: userId } = useLocalUser();
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const {
     currentTicketId,
@@ -71,7 +74,7 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
       const res = await apiClient.admin["test-ticket"][":id"].$get({
         param: { id: currentTicketId },
       });
-      if (!res.ok) throw new Error("获取 ticket 信息失败");
+      if (!res.ok) throw new Error(t("ticket_info_load_failed"));
       return res.json();
     },
     enabled: !!currentTicketId,
@@ -86,7 +89,7 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
   } = useWorkflowChatWebSocket({
     onError: (error) => {
       toast({
-        title: "WebSocket 错误",
+        title: i18n.t("websocket_error"),
         description: error,
         variant: "destructive",
       });
@@ -131,14 +134,14 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
       } catch (error) {
         console.error("发送消息失败:", error);
         toast({
-          title: "发送失败",
-          description: error instanceof Error ? error.message : "未知错误",
+          title: t("send_failed"),
+          description: error instanceof Error ? error.message : t("unknown_error"),
           variant: "destructive",
         });
         throw error;
       }
     },
-    [sendMessage, toast],
+    [sendMessage, t, toast],
   );
 
   // 格式化消息
@@ -170,11 +173,11 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
             : JSON.stringify(message.content);
 
         return {
-          actions: <CopyButton content={contentStr} copyMessage="已复制消息" />,
+          actions: <CopyButton content={contentStr} copyMessage={t("message_copied")} />,
         };
       }
     },
-    [isMessageSending],
+    [isMessageSending, t],
   );
 
   // 渲染逻辑
@@ -185,8 +188,8 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
     return (
       <EmptyState
         icon={<ThreeDotsIcon className="h-16 w-16" />}
-        title="没有测试 Ticket"
-        description="点击 + 按钮创建你的第一个测试 ticket"
+        title={t("no_test_ticket")}
+        description={t("create_first_test_ticket")}
       />
     );
   }
@@ -196,8 +199,8 @@ export function ChatArea({ hasTickets }: ChatAreaProps) {
     return (
       <EmptyState
         icon={<ThreeDotsIcon className="h-16 w-16" />}
-        title="选择一个测试 Ticket"
-        description="从侧边栏选择一个测试 ticket 开始测试"
+        title={t("select_test_ticket")}
+        description={t("select_test_ticket_description")}
       />
     );
   }

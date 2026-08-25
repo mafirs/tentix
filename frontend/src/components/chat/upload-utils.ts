@@ -1,5 +1,6 @@
 // 2. 发送时处理文件上传的工具函数
 
+import type { TFunction } from "i18next";
 import { type JSONContentZod } from "tentix-server/types";
 import { waitForSealosAuthReady } from "../../_provider/sealos";
 import {
@@ -180,6 +181,7 @@ const verifyUploadedVideo = async (
 const verifyUploadedGenericFile = async (
   storageFileName: string,
   file: File,
+  t: TFunction,
 ): Promise<void> => {
   const verifyUrl = new URL("/api/file/verify", window.location.origin);
   verifyUrl.searchParams.set("fileName", storageFileName);
@@ -200,7 +202,7 @@ const verifyUploadedGenericFile = async (
       body?.message === "Uploaded attachment content is invalid";
     const message =
       isLogContentError
-        ? "日志文件需要使用 UTF-8 编码，请转换后重试"
+        ? t("log_file_utf8_required")
         : typeof body?.message === "string"
         ? body.message
         : response.status === 503
@@ -321,6 +323,7 @@ interface UploadedFileInfo {
 // 上传文件并更新内容中的 URL
 export const processFilesAndUpload = async (
   content: JSONContentZod,
+  t: TFunction,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<UploadResult> => {
   const filesToUpload = extractFilesToUpload(content);
@@ -383,7 +386,7 @@ export const processFilesAndUpload = async (
           await verifyUploadedVideo(uploaded.url, uploaded.fileName, file);
         } else if (isGenericAttachmentMimeType(file.type)) {
           reportProgress(id, file, file.size, "checking");
-          await verifyUploadedGenericFile(uploaded.fileName, file);
+          await verifyUploadedGenericFile(uploaded.fileName, file, t);
         }
       } catch (error) {
         console.error(`Failed to upload ${file.name}:`, error);

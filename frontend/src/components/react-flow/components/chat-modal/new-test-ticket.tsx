@@ -156,6 +156,7 @@ export function NewTestTicket({
         try {
           uploadResult = await processFilesAndUpload(
             formData.description,
+            t,
             (progress) => setUploadProgress(progress),
           );
 
