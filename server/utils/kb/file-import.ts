@@ -20,7 +20,15 @@ export type KnowledgeFileCandidate = {
   content: string;
 };
 
-export class KnowledgeFileParseError extends Error {}
+export type KnowledgeFileParseErrorKey =
+  | "knowledge_error.chunk_size"
+  | "knowledge_error.title_depth"
+  | "knowledge_error.candidates_max";
+export class KnowledgeFileParseError extends Error {
+  constructor(public readonly translationKey: KnowledgeFileParseErrorKey) {
+    super(translationKey);
+  }
+}
 
 type FastGPTSplitSettings = {
   chunkSize: number;
@@ -75,7 +83,7 @@ function resolveFastGPTSettings(
     chunkSize < KNOWLEDGE_FILE_MIN_CHUNK_SIZE ||
     chunkSize > KNOWLEDGE_FILE_MAX_CHUNK_SIZE
   ) {
-    throw new KnowledgeFileParseError("自定义分块长度必须在 64 到 4000 之间");
+    throw new KnowledgeFileParseError("knowledge_error.chunk_size");
   }
 
   const paragraphChunkDeep =
@@ -85,7 +93,7 @@ function resolveFastGPTSettings(
     paragraphChunkDeep < 1 ||
     paragraphChunkDeep > 8
   ) {
-    throw new KnowledgeFileParseError("标题识别层级必须在 H1 到 H8 之间");
+    throw new KnowledgeFileParseError("knowledge_error.title_depth");
   }
 
   return {
@@ -412,9 +420,7 @@ function splitText2ChunksFastGPT(
       if (splitContent.trim()) {
         chunks.push({ content: splitContent, title: section.title });
         if (chunks.length > KNOWLEDGE_FILE_MAX_CANDIDATES) {
-          throw new KnowledgeFileParseError(
-            "解析结果超过 100 条，请拆分文件或选择更粗的分块方式",
-          );
+          throw new KnowledgeFileParseError("knowledge_error.candidates_max");
         }
       }
     }
@@ -439,9 +445,7 @@ export function splitKnowledgeFile(
     if (!hasKnowledgeBody(chunk.content)) continue;
     candidates.push({ title: chunk.title, content: chunk.content });
     if (candidates.length > KNOWLEDGE_FILE_MAX_CANDIDATES) {
-      throw new KnowledgeFileParseError(
-        "解析结果超过 100 条，请拆分文件或选择更粗的分块方式",
-      );
+      throw new KnowledgeFileParseError("knowledge_error.candidates_max");
     }
   }
 

@@ -1177,6 +1177,7 @@ function WorkflowsListSkeleton() {
 
 function KnowledgeBaseTab() {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [keyword, setKeyword] = useState("");
   const debouncedKeyword = useDebounce(keyword, 300);
   const [sourceType, setSourceType] =
@@ -1619,9 +1620,9 @@ function KnowledgeBaseTab() {
       <div className="border-b border-border px-6 py-5">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold">知识库</h2>
+            <h2 className="text-base font-semibold">{t("knowledge_base_entry.title")}</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              管理 AI 客服回答时可召回的业务知识，保存后自动重建索引
+              {t("knowledge_base_entry.description")}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1631,15 +1632,15 @@ function KnowledgeBaseTab() {
               onClick={() => setFileImportDialogOpen(true)}
             >
               <FileUp className="mr-2 h-4 w-4" />
-              导入文件
+              {t("knowledge_base_entry.import_file")}
             </Button>
             <Button size="sm" onClick={() => setCreateDialogOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
-              添加通用知识
+              {t("knowledge_base_entry.add_general")}
             </Button>
             <Button variant="outline" size="sm" onClick={handleRefresh}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              刷新
+              {t("knowledge_base_entry.refresh")}
             </Button>
           </div>
         </div>

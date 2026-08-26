@@ -69,6 +69,8 @@ type IndexProgress = {
   completed: number;
 };
 
+type TranslationFunction = ReturnType<typeof useTranslation>["t"];
+
 function getResponseMessage(data: unknown, fallback: string): string {
   if (typeof data === "object" && data !== null && "message" in data) {
     const message = data.message;
@@ -119,6 +121,7 @@ async function runWithConcurrency<T>(
 async function saveFileImportCandidate(
   candidate: FileImportCandidate,
   fileName: string,
+  fallbackMessage: string,
 ): Promise<void> {
   const response = await apiClient.kb.admin["general-knowledge"].$post(
     {
@@ -136,25 +139,25 @@ async function saveFileImportCandidate(
     { fetch: kbAdminSaveFetch },
   );
   if (!response.ok) {
-    throw new Error(await getErrorMessage(response, "导入通用知识失败"));
+    throw new Error(await getErrorMessage(response, fallbackMessage));
   }
 }
 
-function validateCandidate(candidate: FileImportCandidate): KnowledgeFieldErrors | undefined {
+function validateCandidate(candidate: FileImportCandidate, t: TranslationFunction): KnowledgeFieldErrors | undefined {
   const errors: KnowledgeFieldErrors = {};
-  if (!candidate.title.trim()) errors.title = "标题不能为空";
-  if (candidate.modules.length === 0) errors.modules = "至少选择一个模块";
+  if (!candidate.title.trim()) errors.title = t("knowledge_file_import.error_title_required");
+  if (candidate.modules.length === 0) errors.modules = t("knowledge_file_import.error_modules_required");
   if (candidate.modules.length > MAX_MODULES) {
-    errors.modules = `模块数量不能超过 ${MAX_MODULES} 个`;
+    errors.modules = t("knowledge_file_import.error_modules_max", { max: MAX_MODULES });
   }
-  if (!candidate.category) errors.category = "请选择知识类型";
-  if (!candidate.revision.trim()) errors.revision = "版本不能为空";
-  if (!candidate.content.trim()) errors.content = "正文不能为空";
+  if (!candidate.category) errors.category = t("knowledge_file_import.error_category_required");
+  if (!candidate.revision.trim()) errors.revision = t("knowledge_file_import.error_revision_required");
+  if (!candidate.content.trim()) errors.content = t("knowledge_file_import.error_content_required");
   if (candidate.content.trim().length > 20_000) {
-    errors.content = "正文不能超过 20000 个字符";
+    errors.content = t("knowledge_file_import.error_content_max");
   }
   if (candidate.indexes.length > MAX_INDEXES) {
-    errors.indexes = ["召回索引最多 3 条"];
+    errors.indexes = [t("knowledge_file_import.error_indexes_max")];
   }
   return Object.keys(errors).length ? errors : undefined;
 }
@@ -235,7 +238,7 @@ export function FileImportDialog({
     fileReadVersion.current = readVersion;
     const extension = nextFile.name.split(".").pop()?.toLowerCase();
     if (extension !== "md" && extension !== "txt") {
-      setErrorMessage("仅支持 .md 和 .txt 文件");
+      setErrorMessage(t("knowledge_file_import.error_file_extension"));
       setFile(null);
       setFileName("");
       setFileSizeBytes(0);
@@ -249,7 +252,7 @@ export function FileImportDialog({
       return;
     }
     if (nextFile.size > MAX_FILE_BYTES) {
-      setErrorMessage("文件不能超过 10 MB");
+      setErrorMessage(t("knowledge_file_import.error_file_size"));
       setFile(null);
       setFileName("");
       setFileSizeBytes(0);
@@ -280,7 +283,7 @@ export function FileImportDialog({
       if (fileReadVersion.current !== readVersion) return;
       const previousName = fileFingerprints.current.get(fingerprint);
       if (previousName) {
-        setFileWarning(`本次页面会话已选择过内容相同的文件（上次文件名：${previousName}）`);
+        setFileWarning(t("knowledge_file_import.error_duplicate_file", { fileName: previousName }));
       }
       fileFingerprints.current.set(fingerprint, nextFile.name);
       const nextRawText = await nextFile.text();
@@ -288,7 +291,7 @@ export function FileImportDialog({
       setRawText(nextRawText);
     } catch {
       if (fileReadVersion.current !== readVersion) return;
-      setErrorMessage("文件读取失败，请重新选择文件");
+      setErrorMessage(t("knowledge_file_import.error_file_read"));
       setRawText("");
     } finally {
       if (fileReadVersion.current === readVersion) setIsReadingFile(false);
@@ -299,23 +302,23 @@ export function FileImportDialog({
 
   const requestPreview = async () => {
     if (isReadingFile) {
-      setErrorMessage("文件仍在读取，请稍候");
+      setErrorMessage(t("knowledge_file_import.error_file_reading"));
       return;
     }
     if (!file) {
-      setErrorMessage("请先选择文件");
+      setErrorMessage(t("knowledge_file_import.error_choose_file"));
       return;
     }
     if (!rawText) {
-      setErrorMessage("文件内容为空，无法解析");
+      setErrorMessage(t("knowledge_file_import.error_empty_file"));
       return;
     }
     if (!defaultModules.length) {
-      setErrorMessage("请先选择默认工单模块");
+      setErrorMessage(t("knowledge_file_import.error_default_modules"));
       return;
     }
     if (!defaultCategory) {
-      setErrorMessage("请先选择默认知识类型");
+      setErrorMessage(t("knowledge_file_import.error_default_category"));
       return;
     }
     if (splitOptions.chunkSettingMode === "custom") {
@@ -324,7 +327,7 @@ export function FileImportDialog({
         splitOptions.chunkSize < 64 ||
         splitOptions.chunkSize > 4000
       ) {
-        setErrorMessage("自定义分块长度必须在 64 到 4000 之间");
+        setErrorMessage(t("knowledge_file_import.error_chunk_size"));
         return;
       }
       if (
@@ -332,7 +335,7 @@ export function FileImportDialog({
         splitOptions.paragraphChunkDeep < 1 ||
         splitOptions.paragraphChunkDeep > 8
       ) {
-        setErrorMessage("标题识别层级必须在 H1 到 H8 之间");
+        setErrorMessage(t("knowledge_file_import.error_title_depth"));
         return;
       }
     }
@@ -357,7 +360,7 @@ export function FileImportDialog({
         { fetch: kbFilePreviewFetch },
       );
       if (!response.ok) {
-        throw new Error(await getErrorMessage(response, "文件解析失败"));
+        throw new Error(await getErrorMessage(response, t("knowledge_file_parse_failed")));
       }
       const result = await response.json();
       const parsedCandidates = result.data.candidates.map((candidate) => ({
@@ -386,7 +389,7 @@ export function FileImportDialog({
           },
         });
       if (!duplicateResponse.ok) {
-        throw new Error(await getErrorMessage(duplicateResponse, "重复检查失败"));
+        throw new Error(await getErrorMessage(duplicateResponse, t("knowledge_file_import.error_duplicate_check")));
       }
       const duplicateResult = await duplicateResponse.json();
       const existingMatches = new Set(
@@ -409,7 +412,7 @@ export function FileImportDialog({
           };
       });
       if (!candidatesWithDuplicates.length) {
-        throw new Error("没有解析出可导入的知识，请检查文件内容或调整标题深度");
+        throw new Error(t("knowledge_file_import.error_no_candidates"));
       }
 
       setCandidates(candidatesWithDuplicates);
@@ -429,7 +432,7 @@ export function FileImportDialog({
   };
 
   const handleRechunk = () => {
-    if (candidates.length && !window.confirm("重新分块会替换当前候选的编辑内容，是否继续？")) {
+    if (candidates.length && !window.confirm(t("knowledge_file_import.error_rechunk_confirm"))) {
       return;
     }
     void requestPreview();
@@ -437,7 +440,7 @@ export function FileImportDialog({
 
   const goToSettings = () => {
     if (!file || isReadingFile) {
-      setErrorMessage("请先选择并读取文件");
+      setErrorMessage(t("knowledge_file_import.error_choose_read_file"));
       return;
     }
     setErrorMessage("");
@@ -452,11 +455,11 @@ export function FileImportDialog({
       selectedCandidateIds.includes(candidate.candidateId),
     );
     if (!selected.length) {
-      setErrorMessage("请至少选择一条候选知识");
+      setErrorMessage(t("knowledge_file_import.error_choose_candidate"));
       return;
     }
-    if (selected.some((candidate) => Boolean(validateCandidate(candidate)))) {
-      setErrorMessage("请先修正已选候选中的必填内容");
+    if (selected.some((candidate) => Boolean(validateCandidate(candidate, t)))) {
+      setErrorMessage(t("knowledge_file_import.error_fix_required"));
       return;
     }
     setErrorMessage("");
@@ -469,7 +472,7 @@ export function FileImportDialog({
   ) => {
     const validation = items.map((candidate) => ({
       candidate,
-      errors: validateCandidate(candidate),
+      errors: validateCandidate(candidate, t),
     }));
     const invalidItems = validation.filter((item) => item.errors);
     const validItems = validation
@@ -521,7 +524,7 @@ export function FileImportDialog({
             { fetch: kbIndexGenerateFetch },
           );
           if (!response.ok) {
-            throw new Error(await getErrorMessage(response, "召回索引生成失败"));
+            throw new Error(await getErrorMessage(response, t("knowledge_file_import.error_index_generation")));
           }
           const result = await response.json();
           setCandidates((current) =>
@@ -544,7 +547,7 @@ export function FileImportDialog({
                 ? {
                     ...item,
                     indexStatus: "failed" as const,
-                    error: error instanceof Error ? error.message : "召回索引生成失败",
+                    error: error instanceof Error ? error.message : t("knowledge_file_import.error_index_generation"),
                   }
                 : item,
             ),
@@ -583,7 +586,7 @@ export function FileImportDialog({
     );
     const validation = selected.map((candidate) => ({
       candidate,
-      errors: validateCandidate(candidate),
+      errors: validateCandidate(candidate, t),
     }));
     const validItems = validation
       .filter(
@@ -639,7 +642,7 @@ export function FileImportDialog({
     let importedCount = 0;
     await runWithConcurrency(validItems, 2, async (candidate) => {
       try {
-        await saveFileImportCandidate(candidate, fileName);
+        await saveFileImportCandidate(candidate, fileName, t("knowledge_file_import.error_save"));
         importedCount += 1;
         setCandidates((current) =>
           current.map((item) =>
@@ -665,7 +668,7 @@ export function FileImportDialog({
               ? {
                   ...item,
                   importStatus: "failed" as const,
-                  error: error instanceof Error ? error.message : "导入通用知识失败",
+                  error: error instanceof Error ? error.message : t("knowledge_file_import.error_save"),
                 }
               : item,
           ),
@@ -689,11 +692,11 @@ export function FileImportDialog({
   const applyBulkSettings = () => {
     const ids = new Set(selectedCandidateIds);
     if (bulkModules.length > MAX_MODULES) {
-      setErrorMessage(`模块数量不能超过 ${MAX_MODULES} 个`);
+      setErrorMessage(t("knowledge_file_import.error_modules_max", { max: MAX_MODULES }));
       return;
     }
     if (!ids.size) {
-      setErrorMessage("请先选择候选知识");
+      setErrorMessage(t("knowledge_file_import.error_bulk_choose"));
       return;
     }
     setCandidates((current) =>
@@ -745,24 +748,26 @@ export function FileImportDialog({
         <DialogHeader className="border-b border-border px-6 py-5">
           <div className="flex items-center justify-between gap-4 pr-8">
             <div>
-              <DialogTitle>导入知识库文件</DialogTitle>
+              <DialogTitle>{t("knowledge_file_import.title")}</DialogTitle>
               <p className="mt-2 text-sm text-muted-foreground">
-                选择文件，调整分块方式，逐条确认后写入现有通用知识库。
+                {t("knowledge_file_import.description")}
               </p>
             </div>
             <div className="hidden text-right text-xs text-muted-foreground sm:block">
-              <p>{file ? fileName : "尚未选择文件"}</p>
+              <p>{file ? fileName : t("knowledge_file_import.not_selected")}</p>
               <p className="mt-1">
-                {candidates.length ? `${selectedCount}/${candidates.length} 条候选已选` : "等待解析"}
+                {candidates.length
+                  ? t("knowledge_file_import.selected_count", { selected: selectedCount, total: candidates.length })
+                  : t("knowledge_file_import.waiting_parse")}
               </p>
             </div>
           </div>
-          <nav aria-label="文件导入步骤" className="grid grid-cols-4 gap-2 pt-4">
+          <nav aria-label={t("knowledge_file_import.steps_label")} className="grid grid-cols-4 gap-2 pt-4">
             {([
-              ["file", "选择文件"],
-              ["settings", "参数设置"],
-              ["preview", "数据预览"],
-              ["confirm", "确认导入"],
+              ["file", t("knowledge_file_import.step_file")],
+              ["settings", t("knowledge_file_import.step_settings")],
+              ["preview", t("knowledge_file_import.step_preview")],
+              ["confirm", t("knowledge_file_import.step_confirm")],
             ] as const).map(([step, label], index) => (
               <button
                 key={step}
@@ -795,7 +800,7 @@ export function FileImportDialog({
               <div className="grid gap-4 rounded-xl border border-border bg-muted/20 p-5">
                 <div className="flex flex-wrap items-end justify-between gap-4">
                   <div className="grid gap-2">
-                    <Label htmlFor="knowledge-file">本地文件</Label>
+                    <Label htmlFor="knowledge-file">{t("knowledge_file_import.local_file")}</Label>
                     <Input
                       id="knowledge-file"
                       type="file"
@@ -807,12 +812,12 @@ export function FileImportDialog({
                   <div className="text-sm text-muted-foreground">
                     {file
                       ? `${fileName} · ${(fileSizeBytes / 1024).toFixed(1)} KB`
-                      : "仅支持 .md、.txt，最大 10 MB"}
+                      : t("knowledge_file_import.supported_files")}
                   </div>
                 </div>
                 {fileWarning ? <p className="text-sm text-amber-600">{fileWarning}</p> : null}
                 <div className="grid gap-2">
-                  <Label>默认工单模块</Label>
+                  <Label>{t("knowledge_file_import.default_modules")}</Label>
                   <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">
                     {moduleOptions.map((item) => (
                       <label key={item.code} className="flex items-center gap-2 text-sm">
@@ -821,7 +826,7 @@ export function FileImportDialog({
                           disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
                           onCheckedChange={(checked) => {
                             if (checked && defaultModules.length >= MAX_MODULES) {
-                              setErrorMessage(`模块数量不能超过 ${MAX_MODULES} 个`);
+                              setErrorMessage(t("knowledge_file_import.error_modules_max", { max: MAX_MODULES }));
                               return;
                             }
                             setDefaultModules((current) =>
@@ -837,19 +842,19 @@ export function FileImportDialog({
                   </div>
                 </div>
                 <div className="max-w-sm">
-                  <Label>默认知识类型</Label>
+                  <Label>{t("knowledge_file_import.default_category")}</Label>
                   <Select
                     value={defaultCategory}
                     disabled={isReadingFile || isParsing || isImporting || candidates.length > 0}
                     onValueChange={(value) => setDefaultCategory(value as GeneralKnowledgeCategory)}
                   >
                     <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="选择知识类型" />
+                      <SelectValue placeholder={t("knowledge_field.category_placeholder")} />
                     </SelectTrigger>
                     <SelectContent>
                       {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
                         <SelectItem key={category} value={category}>
-                          {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
+                          {t(GENERAL_KNOWLEDGE_CATEGORY_LABELS[category])}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -862,7 +867,7 @@ export function FileImportDialog({
                   disabled={!file || isReadingFile || isParsing || isImporting}
                   onClick={goToSettings}
                 >
-                  下一步：参数设置
+                  {t("knowledge_file_import.next_settings")}
                 </Button>
               </div>
             </section>
@@ -871,14 +876,14 @@ export function FileImportDialog({
           {activeStep === "settings" ? (
             <section className="mx-auto grid max-w-4xl gap-5">
               <div className="rounded-xl border border-border bg-muted/20 p-5">
-                <h3 className="text-base font-semibold">选择分块方式</h3>
+                <h3 className="text-base font-semibold">{t("knowledge_file_import.chunk_settings_title")}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  默认参数适合大多数 Markdown 文件。需要改变标题层级或单段长度时才选择自定义参数。
+                  {t("knowledge_file_import.chunk_settings_description")}
                 </p>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   {([
-                    ["auto", "默认参数", "按 Markdown 标题和自然段落处理，系统自动选择长度和重叠方式。"],
-                    ["custom", "自定义参数", "只在文件结构特殊时选择标题深度或单段长度。"],
+                    ["auto", t("knowledge_file_import.chunk_default"), t("knowledge_file_import.chunk_default_description")],
+                    ["custom", t("knowledge_file_import.chunk_custom"), t("knowledge_file_import.chunk_custom_description")],
                   ] as const).map(([mode, title, description]) => (
                     <button
                       key={mode}
@@ -895,14 +900,14 @@ export function FileImportDialog({
               {splitOptions.chunkSettingMode === "custom" ? (
                 <div className="grid gap-4 rounded-xl border border-border p-5">
                   <div className="grid gap-2">
-                    <p className="text-sm font-medium">按段落和标题</p>
+                    <p className="text-sm font-medium">{t("knowledge_file_import.chunk_paragraph_title")}</p>
                     <p className="text-xs text-muted-foreground">
-                      候选标题使用当前标题；父级标题只作为正文上下文。
+                      {t("knowledge_file_import.chunk_paragraph_description")}
                     </p>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="grid gap-2">
-                      <Label>识别到第几级标题</Label>
+                      <Label>{t("knowledge_file_import.title_depth")}</Label>
                       <Select
                         value={String(splitOptions.paragraphChunkDeep)}
                         onValueChange={(value) =>
@@ -913,15 +918,15 @@ export function FileImportDialog({
                         <SelectContent>
                           {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
                             <SelectItem key={level} value={String(level)}>
-                              识别到 H{level}
+                              {t("knowledge_file_import.title_depth_option", { level })}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-xs text-muted-foreground">更深的标题会留在当前知识正文里。</p>
+                      <p className="text-xs text-muted-foreground">{t("knowledge_file_import.deeper_title_hint")}</p>
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="chunk-size">单条内容长度</Label>
+                      <Label htmlFor="chunk-size">{t("knowledge_file_import.chunk_size")}</Label>
                       <Input
                         id="chunk-size"
                         type="number"
@@ -934,15 +939,15 @@ export function FileImportDialog({
                           setSplitOptions((current) => ({ ...current, chunkSize: Number(event.target.value) }))
                         }
                       />
-                      <p className="text-xs text-muted-foreground">内容超过这个长度时，系统会按段落和标点继续处理。</p>
+                      <p className="text-xs text-muted-foreground">{t("knowledge_file_import.chunk_size_hint")}</p>
                     </div>
                   </div>
                 </div>
               ) : null}
               <div className="flex justify-between gap-3">
-                <Button type="button" variant="outline" onClick={() => setActiveStep("file")}>上一步</Button>
+                <Button type="button" variant="outline" onClick={() => setActiveStep("file")}>{t("knowledge_file_import.previous")}</Button>
                 <Button type="button" disabled={isParsing || isImporting} onClick={handleRechunk}>
-                  {isParsing ? "解析中" : "生成预览"}
+                  {isParsing ? t("knowledge_file_import.parsing") : t("knowledge_file_import.generate_preview")}
                 </Button>
               </div>
             </section>
@@ -952,15 +957,15 @@ export function FileImportDialog({
             <section className="grid min-h-0 gap-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-base font-semibold">候选知识审核</h3>
+                  <h3 className="text-base font-semibold">{t("knowledge_file_import.review_title")}</h3>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    每条候选都可以修改标题、正文、模块、知识类型和索引。
+                    {t("knowledge_file_import.review_description")}
                   </p>
                 </div>
                 <div className="flex gap-2 text-xs text-muted-foreground">
-                  <Badge variant="outline">已选 {selectedCount}</Badge>
-                  <Badge variant="outline">共 {candidates.length}</Badge>
-                  <Badge variant="outline">最多 100 条</Badge>
+                  <Badge variant="outline">{t("knowledge_file_import.selected_badge", { count: selectedCount })}</Badge>
+                  <Badge variant="outline">{t("knowledge_file_import.total_badge", { count: candidates.length })}</Badge>
+                  <Badge variant="outline">{t("knowledge_file_import.max_badge")}</Badge>
                 </div>
               </div>
               <div className="grid gap-4 lg:h-[min(32rem,calc(100vh-24rem))] lg:min-h-0 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
@@ -972,7 +977,7 @@ export function FileImportDialog({
                         setSelectedCandidateIds(checked ? candidates.map((candidate) => candidate.candidateId) : [])
                       }
                     />
-                    全选候选
+                    {t("knowledge_file_import.select_all")}
                   </label>
                   <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
                     {candidates.map((candidate, index) => (
@@ -990,11 +995,11 @@ export function FileImportDialog({
                             className="min-w-0 flex-1 text-left"
                             onClick={() => setSelectedCandidateId(candidate.candidateId)}
                           >
-                            <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || "未填写标题"}</span>
+                            <span className="block truncate text-sm font-medium">#{index + 1} {candidate.title || t("knowledge_file_import.untitled")}</span>
                             <span className="mt-1 flex flex-wrap gap-1">
-                              <Badge variant="outline">{candidate.indexStatus === "success" ? "索引完成" : candidate.indexStatus === "failed" ? "索引失败" : "索引待处理"}</Badge>
+                              <Badge variant="outline">{candidate.indexStatus === "success" ? t("knowledge_file_import.index_complete") : candidate.indexStatus === "failed" ? t("knowledge_file_import.index_failed") : t("knowledge_file_import.index_pending")}</Badge>
                               <Badge variant={candidate.importStatus === "success" ? "default" : "outline"}>
-                                {candidate.importStatus === "success" ? "已导入" : candidate.importStatus === "failed" ? "导入失败" : candidate.importStatus === "skipped" ? "已跳过" : "待导入"}
+                                {candidate.importStatus === "success" ? t("knowledge_file_import.imported") : candidate.importStatus === "failed" ? t("knowledge_file_import.import_failed") : candidate.importStatus === "skipped" ? t("knowledge_file_import.skipped") : t("knowledge_file_import.import_pending")}
                               </Badge>
                             </span>
                             {candidate.error ? <span className="mt-1 block text-xs text-destructive">{candidate.error}</span> : null}
@@ -1002,7 +1007,7 @@ export function FileImportDialog({
                         </div>
                         {candidate.duplicate !== "none" ? (
                           <div className="mt-2 grid gap-2 text-xs text-amber-700">
-                            <span>{candidate.duplicate === "current" ? "与当前文件中的其他候选正文重复" : "与已有知识正文重复"}</span>
+                            <span>{candidate.duplicate === "current" ? t("knowledge_file_import.duplicate_current") : t("knowledge_file_import.duplicate_existing")}</span>
                             <div className="flex gap-2">
                               <Button
                                 type="button"
@@ -1010,7 +1015,7 @@ export function FileImportDialog({
                                 variant={candidate.duplicateAction === "skip" ? "default" : "outline"}
                                 onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "skip" as const } : item))}
                               >
-                                跳过
+                                {t("knowledge_file_import.skip")}
                               </Button>
                               <Button
                                 type="button"
@@ -1018,16 +1023,16 @@ export function FileImportDialog({
                                 variant={candidate.duplicateAction === "continue" ? "default" : "outline"}
                                 onClick={() => setCandidates((current) => current.map((item) => item.candidateId === candidate.candidateId ? { ...item, duplicateAction: "continue" as const } : item))}
                               >
-                                继续导入
+                                {t("knowledge_file_import.continue_import")}
                               </Button>
                             </div>
                           </div>
                         ) : null}
                         {candidate.indexStatus === "failed" ? (
-                          <Button type="button" size="sm" variant="outline" className="mt-2" disabled={isGeneratingIndexes} onClick={() => void generateIndexes([candidate])}>重试索引</Button>
+                          <Button type="button" size="sm" variant="outline" className="mt-2" disabled={isGeneratingIndexes} onClick={() => void generateIndexes([candidate])}>{t("knowledge_file_import.retry_index")}</Button>
                         ) : null}
                         {candidate.importStatus === "failed" ? (
-                          <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>重试导入</Button>
+                          <Button type="button" size="sm" variant="outline" className="mt-2 ml-2" onClick={() => void handleImport([candidate])}>{t("knowledge_file_import.retry_import")}</Button>
                         ) : null}
                       </div>
                     ))}
@@ -1047,44 +1052,44 @@ export function FileImportDialog({
                         disabled={isImporting || selectedCandidate.importStatus === "success"}
                       />
                       {selectedCandidate.contentModified ? (
-                        <p className="mt-3 text-xs text-amber-600">正文已修改，召回索引可能不再匹配。你仍然可以继续导入。</p>
+                        <p className="mt-3 text-xs text-amber-600">{t("knowledge_file_import.content_modified_warning")}</p>
                       ) : null}
                     </>
                   ) : (
-                    <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">请选择候选知识</div>
+                    <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">{t("knowledge_file_import.select_candidate")}</div>
                   )}
                 </div>
               </div>
               <section className="grid gap-3 rounded-xl border border-border bg-muted/20 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold">批量设置和处理状态</h3>
-                    <p className="text-xs text-muted-foreground">批量设置只作用于当前勾选的候选。</p>
+                    <h3 className="text-sm font-semibold">{t("knowledge_file_import.batch_title")}</h3>
+                    <p className="text-xs text-muted-foreground">{t("knowledge_file_import.batch_description")}</p>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>导入待处理 {pendingCount}</span>
-                    <span>导入成功 {successCount}</span>
-                    <span>导入失败 {failedCount}</span>
+                    <span>{t("knowledge_file_import.import_pending_count", { count: pendingCount })}</span>
+                    <span>{t("knowledge_file_import.import_success_count", { count: successCount })}</span>
+                    <span>{t("knowledge_file_import.import_failed_count", { count: failedCount })}</span>
                   </div>
                 </div>
                 {indexProgress ? (
                   <div className="grid gap-2">
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{isGeneratingIndexes ? "索引生成中" : "索引处理完成"}</span>
+                      <span>{isGeneratingIndexes ? t("knowledge_file_import.index_generating") : t("knowledge_file_import.index_complete_status")}</span>
                       <span>
                         {indexProgress.completed} / {indexProgress.total}
                       </span>
                     </div>
                     <Progress
                       value={indexProgressValue}
-                      aria-label="索引生成进度"
+                      aria-label={t("knowledge_file_import.index_progress_aria")}
                       className="h-2"
                     />
                   </div>
                 ) : null}
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_auto]">
                   <div className="grid gap-2">
-                    <Label>批量设置模块</Label>
+                    <Label>{t("knowledge_file_import.bulk_modules")}</Label>
                     <div className="flex max-h-20 flex-wrap gap-x-3 gap-y-2 overflow-auto rounded-md border border-border bg-background p-2">
                       {availableModuleOptions.map((item) => (
                         <label key={item.code} className="flex items-center gap-1 text-xs">
@@ -1098,24 +1103,24 @@ export function FileImportDialog({
                     </div>
                   </div>
                   <div className="grid gap-2">
-                    <Label>批量设置知识类型</Label>
+                    <Label>{t("knowledge_file_import.bulk_category")}</Label>
                     <Select value={bulkCategory} onValueChange={(value) => setBulkCategory(value as GeneralKnowledgeCategory)}>
-                      <SelectTrigger><SelectValue placeholder="不修改" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder={t("knowledge_file_import.no_change")} /></SelectTrigger>
                       <SelectContent>
                         {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
-                          <SelectItem key={category} value={category}>{GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}</SelectItem>
+                          <SelectItem key={category} value={category}>{t(GENERAL_KNOWLEDGE_CATEGORY_LABELS[category])}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button type="button" variant="outline" className="self-end" onClick={applyBulkSettings}>应用</Button>
+                  <Button type="button" variant="outline" className="self-end" onClick={applyBulkSettings}>{t("knowledge_file_import.apply")}</Button>
                 </div>
               </section>
               <div className="flex justify-between gap-3">
-                <Button type="button" variant="outline" onClick={() => setActiveStep("settings")}>返回参数设置</Button>
+                <Button type="button" variant="outline" onClick={() => setActiveStep("settings")}>{t("knowledge_file_import.back_settings")}</Button>
                 <div className="flex gap-2">
-                  <Button type="button" variant="outline" disabled={isParsing || isImporting || isGeneratingIndexes || !selectedCount} onClick={handleGenerateIndexes}>{isGeneratingIndexes ? "索引生成中" : "一键生成索引"}</Button>
-                  <Button type="button" disabled={isParsing || isImporting || isGeneratingIndexes} onClick={goToConfirm}>下一步：确认导入</Button>
+                  <Button type="button" variant="outline" disabled={isParsing || isImporting || isGeneratingIndexes || !selectedCount} onClick={handleGenerateIndexes}>{isGeneratingIndexes ? t("knowledge_file_import.index_generating") : t("knowledge_file_import.one_click_index")}</Button>
+                  <Button type="button" disabled={isParsing || isImporting || isGeneratingIndexes} onClick={goToConfirm}>{t("knowledge_file_import.next_confirm")}</Button>
                 </div>
               </div>
             </section>
@@ -1124,32 +1129,32 @@ export function FileImportDialog({
           {activeStep === "confirm" ? (
             <section className="mx-auto grid max-w-3xl gap-5">
               <div className="rounded-xl border border-border bg-muted/20 p-5">
-                <h3 className="text-base font-semibold">确认导入</h3>
+                <h3 className="text-base font-semibold">{t("knowledge_file_import.confirm_title")}</h3>
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                  <div><dt className="text-muted-foreground">文件</dt><dd className="mt-1 break-all">{fileName}</dd></div>
-                  <div><dt className="text-muted-foreground">候选数量</dt><dd className="mt-1">{selectedCount} 条</dd></div>
-                  <div><dt className="text-muted-foreground">索引状态</dt><dd className="mt-1">已生成 {candidates.filter((candidate) => candidate.indexStatus === "success").length} 条，未生成也可以导入</dd></div>
-                  <div><dt className="text-muted-foreground">失败状态</dt><dd className="mt-1">{failedCount ? `${failedCount} 条失败，可返回重试` : "没有失败项"}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("knowledge_file_import.file")}</dt><dd className="mt-1 break-all">{fileName}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("knowledge_file_import.candidate_count")}</dt><dd className="mt-1">{t("knowledge_file_import.total_badge", { count: selectedCount })}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("knowledge_file_import.index_status")}</dt><dd className="mt-1">{t("knowledge_file_import.index_complete")} {candidates.filter((candidate) => candidate.indexStatus === "success").length}</dd></div>
+                  <div><dt className="text-muted-foreground">{t("knowledge_file_import.failed_status")}</dt><dd className="mt-1">{failedCount ? t("knowledge_file_import.import_failed_count", { count: failedCount }) : t("knowledge_file_import.no_failed")}</dd></div>
                 </dl>
                 {importProgress ? (
                   <div className="mt-4 grid gap-2">
                     <div className="flex justify-between text-sm">
-                      <span>{isImporting ? "导入中" : "处理完成"}</span>
+                      <span>{isImporting ? t("knowledge_file_import.import_progress") : t("knowledge_file_import.processing_complete")}</span>
                       <span>
                         {importProgress.completed} / {importProgress.total}
                       </span>
                     </div>
                     <Progress
                       value={importProgressValue}
-                      aria-label="导入进度"
+                      aria-label={t("knowledge_file_import.import_progress_aria")}
                       className="h-2"
                     />
                   </div>
                 ) : null}
               </div>
               <div className="flex justify-between gap-3">
-                <Button type="button" variant="outline" disabled={isImporting} onClick={() => setActiveStep("preview")}>返回审核</Button>
-                <Button type="button" disabled={isImporting} onClick={() => void handleImport()}>{isImporting ? "导入中" : "确认并导入选中内容"}</Button>
+                <Button type="button" variant="outline" disabled={isImporting} onClick={() => setActiveStep("preview")}>{t("knowledge_file_import.previous")}</Button>
+                <Button type="button" disabled={isImporting} onClick={() => void handleImport()}>{isImporting ? t("knowledge_file_import.import_progress") : t("knowledge_file_import.confirm_import")}</Button>
               </div>
             </section>
           ) : null}
@@ -1157,7 +1162,7 @@ export function FileImportDialog({
 
         <DialogFooter className="border-t border-border bg-background px-6 py-4">
           {errorMessage ? <p role="alert" className="mr-auto max-w-xl text-sm text-destructive">{errorMessage}</p> : null}
-          <Button type="button" variant="outline" disabled={isImporting} onClick={() => onOpenChange(false)}>取消</Button>
+          <Button type="button" variant="outline" disabled={isImporting} onClick={() => onOpenChange(false)}>{t("knowledge_file_import.cancel")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -11,6 +11,7 @@ import {
   Textarea,
 } from "tentix-ui";
 import { useId } from "react";
+import { useTranslation } from "i18n";
 
 export const GENERAL_KNOWLEDGE_CATEGORY_VALUES = [
   "troubleshooting",
@@ -24,11 +25,11 @@ export const GENERAL_KNOWLEDGE_CATEGORY_LABELS: Record<
   (typeof GENERAL_KNOWLEDGE_CATEGORY_VALUES)[number],
   string
 > = {
-  troubleshooting: "故障排查",
-  feature: "功能说明",
-  billing: "费用计费",
-  operation: "运营规则",
-  other: "其他",
+  troubleshooting: "knowledge_category.troubleshooting",
+  feature: "knowledge_category.feature",
+  billing: "knowledge_category.billing",
+  operation: "knowledge_category.operation",
+  other: "knowledge_category.other",
 };
 
 export type GeneralKnowledgeCategory =
@@ -87,6 +88,7 @@ export function KnowledgeFieldsEditor({
   disabled = false,
 }: KnowledgeFieldsEditorProps) {
   const fieldId = useId();
+  const { t } = useTranslation();
   const update = (next: Partial<KnowledgeFieldValues>) => {
     onChange({ ...value, ...next });
   };
@@ -95,14 +97,14 @@ export function KnowledgeFieldsEditor({
     <div className="grid gap-5">
       <div className="grid gap-2">
         <div className="flex items-center justify-between gap-3">
-          <Label htmlFor={`${fieldId}-title`}>标题</Label>
-          <span className="text-xs text-muted-foreground">用于列表显示和召回结果标题</span>
+          <Label htmlFor={`${fieldId}-title`}>{t("knowledge_field.title")}</Label>
+          <span className="text-xs text-muted-foreground">{t("knowledge_field.title_hint")}</span>
         </div>
         <Input
           id={`${fieldId}-title`}
           value={value.title}
           disabled={disabled}
-          placeholder="例如：账号登录失败"
+          placeholder={t("knowledge_field.title_placeholder")}
           onChange={(event) => update({ title: event.target.value })}
         />
         <FieldError message={errors?.title} />
@@ -110,11 +112,11 @@ export function KnowledgeFieldsEditor({
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(16rem,0.8fr)]">
         <div className="grid gap-2">
-          <Label>正文</Label>
+          <Label>{t("knowledge_field.content")}</Label>
           <Textarea
             value={value.content}
             disabled={disabled}
-            placeholder="填写会返回给 AI 的正式知识内容"
+            placeholder={t("knowledge_field.content_placeholder")}
             className="min-h-[360px] max-w-full [field-sizing:fixed] [overflow-wrap:anywhere] [word-break:break-word]"
             onChange={(event) => update({ content: event.target.value })}
           />
@@ -123,7 +125,7 @@ export function KnowledgeFieldsEditor({
 
         <div className="grid content-start gap-4 rounded-lg border border-border bg-muted/20 p-4">
           <div className="grid gap-2">
-            <Label>适用模块</Label>
+            <Label>{t("knowledge_field.modules")}</Label>
             <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3">
               {moduleOptions.length ? (
                 moduleOptions.map((item) => (
@@ -143,14 +145,14 @@ export function KnowledgeFieldsEditor({
                   </label>
                 ))
               ) : (
-                <span className="text-sm text-muted-foreground">暂无可选模块</span>
+                <span className="text-sm text-muted-foreground">{t("knowledge_field.no_modules")}</span>
               )}
             </div>
             <FieldError message={errors?.modules} />
           </div>
 
           <div className="grid gap-2">
-            <Label>知识类型</Label>
+            <Label>{t("knowledge_field.category")}</Label>
             <Select
               value={value.category}
               disabled={disabled}
@@ -159,12 +161,12 @@ export function KnowledgeFieldsEditor({
               }
             >
               <SelectTrigger>
-                <SelectValue placeholder="选择知识类型" />
+                <SelectValue placeholder={t("knowledge_field.category_placeholder")} />
               </SelectTrigger>
               <SelectContent>
                 {GENERAL_KNOWLEDGE_CATEGORY_VALUES.map((category) => (
                   <SelectItem key={category} value={category}>
-                    {GENERAL_KNOWLEDGE_CATEGORY_LABELS[category]}
+                    {t(GENERAL_KNOWLEDGE_CATEGORY_LABELS[category])}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -174,12 +176,12 @@ export function KnowledgeFieldsEditor({
 
           {showRevision ? (
             <div className="grid gap-2">
-              <Label htmlFor={`${fieldId}-revision`}>版本</Label>
+              <Label htmlFor={`${fieldId}-revision`}>{t("knowledge_field.revision")}</Label>
               <Input
                 id={`${fieldId}-revision`}
                 value={value.revision}
                 disabled={disabled}
-                placeholder="例如：manual-2026-08-20"
+                placeholder={t("knowledge_field.revision_placeholder")}
                 onChange={(event) => update({ revision: event.target.value })}
               />
               <FieldError message={errors?.revision} />
@@ -192,8 +194,8 @@ export function KnowledgeFieldsEditor({
         <div className="grid gap-3 rounded-lg border border-border p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-medium">召回索引</p>
-              <p className="text-xs text-muted-foreground">最多填写三条，可留空</p>
+              <p className="text-sm font-medium">{t("knowledge_field.indexes")}</p>
+              <p className="text-xs text-muted-foreground">{t("knowledge_field.indexes_hint")}</p>
             </div>
             {showIndexGenerationControls ? (
               <div className="flex items-center gap-3">
@@ -205,7 +207,7 @@ export function KnowledgeFieldsEditor({
                       onAutoGenerateIndexesChange?.(checked === true)
                     }
                   />
-                  自动生成
+                  {t("knowledge_field.auto_generate")}
                 </label>
                 <Button
                   type="button"
@@ -218,7 +220,7 @@ export function KnowledgeFieldsEditor({
                   }
                   onClick={onGenerateIndexes}
                 >
-                  {indexGenerationPending ? "生成中" : "生成索引"}
+                  {indexGenerationPending ? t("knowledge_field.generating_indexes") : t("knowledge_field.generate_indexes")}
                 </Button>
               </div>
             ) : null}
@@ -227,13 +229,13 @@ export function KnowledgeFieldsEditor({
             {[0, 1, 2].map((index) => (
               <div key={index} className="grid gap-2">
                 <Label htmlFor={`${fieldId}-index-${index}`}>
-                  召回索引 {index + 1}
+                  {t("knowledge_field.index_label", { index: index + 1 })}
                 </Label>
                 <Input
                   id={`${fieldId}-index-${index}`}
                   value={value.indexes[index] ?? ""}
                   disabled={disabled}
-                  placeholder="用户可能的问法，可留空"
+                  placeholder={t("knowledge_field.index_placeholder")}
                   onChange={(event) => {
                     const indexes = [...value.indexes];
                     indexes[index] = event.target.value;
