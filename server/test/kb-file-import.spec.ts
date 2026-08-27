@@ -3,6 +3,84 @@ import {
   normalizeKnowledgeDuplicateContent,
   splitKnowledgeFile,
 } from "../utils/kb/file-import.ts";
+import { parseKnowledgeFile } from "../utils/kb/file-parsers.ts";
+import { unzipSync, zipSync } from "fflate";
+import * as XLSX from "xlsx";
+
+const textEncoder = new TextEncoder();
+
+function bytes(value: string): Uint8Array {
+  return textEncoder.encode(value);
+}
+
+function createDocxFixture(includeMedia = false): Uint8Array {
+  const files: Record<string, Uint8Array> = {
+    "[Content_Types].xml": bytes(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`,
+    ),
+    "_rels/.rels": bytes(
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`,
+    ),
+    "word/document.xml": bytes(
+      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>DOCX text</w:t></w:r></w:p><w:sectPr/></w:body>
+</w:document>`,
+    ),
+  };
+  if (includeMedia) files["word/media/image.png"] = new Uint8Array([1, 2, 3]);
+  return zipSync(files);
+}
+
+function createXlsxFixture(includeMedia = false): Uint8Array {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.aoa_to_sheet([
+      ["Name", "Value"],
+      ["A", "1"],
+    ]),
+    "Sheet 1",
+  );
+  const workbookBytes = new Uint8Array(
+    XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }),
+  );
+  if (!includeMedia) return workbookBytes;
+
+  const files = unzipSync(workbookBytes);
+  files["xl/media/image1.png"] = new Uint8Array([1, 2, 3]);
+  return zipSync(files);
+}
+
+function createPdfFixture(text: string): Uint8Array {
+  const content = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET\n`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`,
+  ];
+  let output = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(output.length);
+    output += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = output.length;
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) {
+    output += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  }
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return bytes(output);
+}
 
 const customOptions = (overrides: Record<string, unknown> = {}) => ({
   chunkSettingMode: "custom" as const,
@@ -150,5 +228,94 @@ describe("knowledge file import parser", () => {
   test("normalizes only outer whitespace and line endings for duplicate checks", () => {
     expect(normalizeKnowledgeDuplicateContent("  a\r\nb  ")).toBe("a\nb");
     expect(normalizeKnowledgeDuplicateContent("a  b")).not.toBe("a b");
+  });
+
+  test("parses markdown and ignores image syntax with a warning", async () => {
+    const result = await parseKnowledgeFile({
+      fileName: "guide.md",
+      bytes: bytes("# Title\n\nText ![image](image.png) remains"),
+    });
+    expect(result.rawText).toContain("# Title");
+    expect(result.rawText).not.toContain("![image]");
+    expect(result.warningKeys).toEqual(["knowledge_warning.unsupported_content"]);
+  });
+
+  test("parses html text and ignores media nodes with a warning", async () => {
+    const result = await parseKnowledgeFile({
+      fileName: "guide.html",
+      bytes: bytes("<h1>Title</h1><p>Text</p><img src='x.png'><svg></svg>"),
+    });
+    expect(result.rawText).toContain("Title");
+    expect(result.rawText).toContain("Text");
+    expect(result.rawText).not.toContain("x.png");
+    expect(result.warningKeys).toEqual(["knowledge_warning.unsupported_content"]);
+  });
+
+  test("parses csv into text that can enter the existing splitter", async () => {
+    const result = await parseKnowledgeFile({
+      fileName: "table.csv",
+      bytes: bytes("Name,Value\nA,1\nB,2"),
+    });
+    expect(result.rawText).toContain("| Name | Value |");
+    expect(result.rawText).toContain("| A | 1 |");
+    expect(result.warningKeys).toHaveLength(0);
+  });
+
+  test("parses docx and xlsx text while warning about media", async () => {
+    const docxResult = await parseKnowledgeFile({
+      fileName: "guide.docx",
+      bytes: createDocxFixture(true),
+    });
+    expect(docxResult.rawText).toContain("DOCX text");
+    expect(docxResult.warningKeys).toEqual(["knowledge_warning.unsupported_content"]);
+
+    const xlsxResult = await parseKnowledgeFile({
+      fileName: "table.xlsx",
+      bytes: createXlsxFixture(true),
+    });
+    expect(xlsxResult.rawText).toContain("| Name | Value |");
+    expect(xlsxResult.warningKeys).toEqual(["knowledge_warning.unsupported_content"]);
+  });
+
+  test("parses a text-layer pdf and rejects an empty-text pdf", async () => {
+    const result = await parseKnowledgeFile({
+      fileName: "guide.pdf",
+      bytes: createPdfFixture("PDF text"),
+    });
+    expect(result.rawText).toContain("PDF text");
+
+    await expect(
+      parseKnowledgeFile({ fileName: "scan.pdf", bytes: createPdfFixture("") }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_no_text" });
+  });
+
+  test("rejects an encrypted pdf marker", async () => {
+    await expect(
+      parseKnowledgeFile({
+        fileName: "encrypted.pdf",
+        bytes: bytes("%PDF-1.4\ntrailer\n<< /Encrypt 5 0 R >>\n%%EOF"),
+      }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_encrypted" });
+  });
+
+  test("rejects unsupported, oversized, malformed, and empty files", async () => {
+    await expect(
+      parseKnowledgeFile({ fileName: "slide.pptx", bytes: new Uint8Array([1]) }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_extension" });
+    await expect(
+      parseKnowledgeFile({
+        fileName: "large.txt",
+        bytes: new Uint8Array(10 * 1024 * 1024 + 1),
+      }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_size" });
+    await expect(
+      parseKnowledgeFile({ fileName: "bad.docx", bytes: new Uint8Array([1, 2, 3]) }),
+    ).rejects.toThrow();
+    await expect(
+      parseKnowledgeFile({ fileName: "invalid.txt", bytes: new Uint8Array([0xff]) }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_corrupt" });
+    await expect(
+      parseKnowledgeFile({ fileName: "empty.txt", bytes: new Uint8Array() }),
+    ).rejects.toMatchObject({ translationKey: "knowledge_error.file_no_text" });
   });
 });

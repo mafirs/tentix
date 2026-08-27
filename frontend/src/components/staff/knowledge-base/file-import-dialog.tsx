@@ -175,7 +175,7 @@ export function FileImportDialog({
   const [fileName, setFileName] = useState("");
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [rawText, setRawText] = useState("");
-  const [fileWarning, setFileWarning] = useState("");
+  const [fileWarnings, setFileWarnings] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [candidates, setCandidates] = useState<FileImportCandidate[]>([]);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
@@ -237,12 +237,13 @@ export function FileImportDialog({
     const readVersion = fileReadVersion.current + 1;
     fileReadVersion.current = readVersion;
     const extension = nextFile.name.split(".").pop()?.toLowerCase();
-    if (extension !== "md" && extension !== "txt") {
+    if (!extension || !["md", "txt", "html", "pdf", "docx", "csv", "xlsx"].includes(extension)) {
       setErrorMessage(t("knowledge_file_import.error_file_extension"));
       setFile(null);
       setFileName("");
       setFileSizeBytes(0);
       setRawText("");
+      setFileWarnings([]);
       setCandidates([]);
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
@@ -257,6 +258,7 @@ export function FileImportDialog({
       setFileName("");
       setFileSizeBytes(0);
       setRawText("");
+      setFileWarnings([]);
       setCandidates([]);
       setSelectedCandidateIds([]);
       setSelectedCandidateId("");
@@ -267,7 +269,7 @@ export function FileImportDialog({
     }
 
     setErrorMessage("");
-    setFileWarning("");
+    setFileWarnings([]);
     setIsReadingFile(true);
     setFile(nextFile);
     setFileName(nextFile.name);
@@ -282,17 +284,30 @@ export function FileImportDialog({
       const fingerprint = await getFileFingerprint(nextFile);
       if (fileReadVersion.current !== readVersion) return;
       const previousName = fileFingerprints.current.get(fingerprint);
-      if (previousName) {
-        setFileWarning(t("knowledge_file_import.error_duplicate_file", { fileName: previousName }));
-      }
+      const nextWarnings = previousName
+        ? [t("knowledge_file_import.error_duplicate_file", { fileName: previousName })]
+        : [];
       fileFingerprints.current.set(fingerprint, nextFile.name);
-      const nextRawText = await nextFile.text();
       if (fileReadVersion.current !== readVersion) return;
-      setRawText(nextRawText);
-    } catch {
+
+      const form = new FormData();
+      form.append("file", nextFile);
+      const response = await apiClient.kb.admin["general-knowledge"].file.parse.$post(
+        { body: form },
+        { fetch: kbFilePreviewFetch },
+      );
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response, t("knowledge_file_parse_failed")));
+      }
+      const result = await response.json();
       if (fileReadVersion.current !== readVersion) return;
-      setErrorMessage(t("knowledge_file_import.error_file_read"));
+      setRawText(result.data.rawText);
+      setFileWarnings([...nextWarnings, ...result.data.warnings]);
+    } catch (error) {
+      if (fileReadVersion.current !== readVersion) return;
+      setErrorMessage(getThrownErrorMessage(error, t("knowledge_file_parse_failed")));
       setRawText("");
+      setFileWarnings([]);
     } finally {
       if (fileReadVersion.current === readVersion) setIsReadingFile(false);
     }
@@ -310,7 +325,7 @@ export function FileImportDialog({
       return;
     }
     if (!rawText) {
-      setErrorMessage(t("knowledge_file_import.error_empty_file"));
+      setErrorMessage(t("knowledge_file_import.error_choose_read_file"));
       return;
     }
     if (!defaultModules.length) {
@@ -439,7 +454,7 @@ export function FileImportDialog({
   };
 
   const goToSettings = () => {
-    if (!file || isReadingFile) {
+    if (!file || isReadingFile || !rawText) {
       setErrorMessage(t("knowledge_file_import.error_choose_read_file"));
       return;
     }
@@ -804,7 +819,7 @@ export function FileImportDialog({
                     <Input
                       id="knowledge-file"
                       type="file"
-                      accept=".md,.txt,text/markdown,text/plain"
+                      accept=".md,.txt,.html,.pdf,.docx,.csv,.xlsx"
                       disabled={isReadingFile || isParsing || isImporting}
                       onChange={(event) => void handleFileChange(event.target.files?.[0])}
                     />
@@ -815,7 +830,12 @@ export function FileImportDialog({
                       : t("knowledge_file_import.supported_files")}
                   </div>
                 </div>
-                {fileWarning ? <p className="text-sm text-amber-600">{fileWarning}</p> : null}
+                {isReadingFile ? (
+                  <p className="text-sm text-muted-foreground">{t("knowledge_file_import.file_parsing")}</p>
+                ) : null}
+                {fileWarnings.map((warning) => (
+                  <p key={warning} role="status" className="text-sm text-amber-600">{warning}</p>
+                ))}
                 <div className="grid gap-2">
                   <Label>{t("knowledge_file_import.default_modules")}</Label>
                   <div className="grid max-h-52 gap-2 overflow-auto rounded-md border border-border bg-background p-3 sm:grid-cols-2">

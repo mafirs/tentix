@@ -23,7 +23,20 @@ export type KnowledgeFileCandidate = {
 export type KnowledgeFileParseErrorKey =
   | "knowledge_error.chunk_size"
   | "knowledge_error.title_depth"
-  | "knowledge_error.candidates_max";
+  | "knowledge_error.candidates_max"
+  | "knowledge_error.file_missing"
+  | "knowledge_error.file_name"
+  | "knowledge_error.file_extension"
+  | "knowledge_error.file_size"
+  | "knowledge_error.file_read"
+  | "knowledge_error.file_corrupt"
+  | "knowledge_error.file_encrypted"
+  | "knowledge_error.file_no_text"
+  | "knowledge_error.file_parse_failed"
+  | "knowledge_error.file_parse_limit";
+
+export type KnowledgeFileWarningKey =
+  | "knowledge_warning.unsupported_content";
 export class KnowledgeFileParseError extends Error {
   constructor(public readonly translationKey: KnowledgeFileParseErrorKey) {
     super(translationKey);

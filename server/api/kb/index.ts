@@ -42,6 +42,7 @@ import {
   KnowledgeFileParseError,
   type KnowledgeFileCandidate,
 } from "@/utils/kb/file-import.ts";
+import { parseKnowledgeFile } from "@/utils/kb/file-parsers.ts";
 
 const createFavoritedSchema = z.object({
   ticketId: z.string(),
@@ -156,7 +157,7 @@ const knowledgeFilePreviewSchema = z
       .trim()
       .min(1)
       .max(200)
-      .regex(/\.(?:md|txt)$/i),
+      .regex(/\.(?:md|txt|html|pdf|docx|csv|xlsx)$/i),
     fileSizeBytes: z.number().int().positive().max(KNOWLEDGE_FILE_MAX_BYTES),
     rawText: z.string(),
     chunkSettingMode: z.enum(["auto", "custom"]),
@@ -669,6 +670,56 @@ const kbRouter = factory
   .use(authMiddleware)
   .use(staffOnlyMiddleware())
   .post(
+    "/admin/general-knowledge/file/parse",
+    adminOnlyMiddleware(),
+    async (c) => {
+      const t = c.get("i18n").getFixedT(detectLocale(c));
+      let form: FormData;
+      try {
+        form = await c.req.formData();
+      } catch {
+        throw new HTTPException(422, { message: t("knowledge_error.file_parse_failed") });
+      }
+
+      const uploaded = form.get("file");
+      if (!(uploaded instanceof File)) {
+        throw new HTTPException(422, { message: t("knowledge_error.file_missing") });
+      }
+      const fileName = uploaded.name.trim();
+      if (uploaded.size > KNOWLEDGE_FILE_MAX_BYTES) {
+        throw new HTTPException(422, { message: t("knowledge_error.file_size") });
+      }
+      if (!fileName || fileName.length > 200) {
+        throw new HTTPException(422, { message: t("knowledge_error.file_name") });
+      }
+
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(await uploaded.arrayBuffer());
+      } catch {
+        throw new HTTPException(422, { message: t("knowledge_error.file_read") });
+      }
+
+      try {
+        const result = await parseKnowledgeFile({ fileName, bytes });
+        return c.json({
+          success: true,
+          data: {
+            fileName,
+            fileSizeBytes: uploaded.size,
+            rawText: result.rawText,
+            warnings: result.warningKeys.map((key) => t(key)),
+          },
+        });
+      } catch (error) {
+        if (error instanceof KnowledgeFileParseError) {
+          throw new HTTPException(422, { message: t(error.translationKey) });
+        }
+        throw error;
+      }
+    },
+  )
+  .post(
     "/admin/general-knowledge/file/preview",
     adminOnlyMiddleware(),
     zValidator("json", knowledgeFilePreviewSchema, knowledgeValidationHook),
@@ -688,6 +739,10 @@ const kbRouter = factory
           throw new HTTPException(422, { message: t(error.translationKey) });
         }
         throw error;
+      }
+      if (!candidates.length) {
+        const t = c.get("i18n").getFixedT(detectLocale(c));
+        throw new HTTPException(422, { message: t("knowledge_error.file_no_text") });
       }
 
       return c.json({
