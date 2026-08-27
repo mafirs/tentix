@@ -293,8 +293,8 @@ export function FileImportDialog({
       const form = new FormData();
       form.append("file", nextFile);
       const response = await apiClient.kb.admin["general-knowledge"].file.parse.$post(
-        { body: form },
-        { fetch: kbFilePreviewFetch },
+        {},
+        { fetch: kbFilePreviewFetch, init: { body: form } },
       );
       if (!response.ok) {
         throw new Error(await getErrorMessage(response, t("knowledge_file_parse_failed")));
