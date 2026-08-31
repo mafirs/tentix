@@ -264,6 +264,38 @@ function getSplitUnits(text: string, level: number): string[] {
   return Array.from(text);
 }
 
+function isHeadingOnlyUnit(unit: string): boolean {
+  let hasHeading = false;
+  for (const line of unit.split("\n")) {
+    if (!line.trim()) continue;
+    if (!getHeading(line)) return false;
+    hasHeading = true;
+  }
+  return hasHeading;
+}
+
+function mergeHeadingUnits(units: string[], separator = ""): string[] {
+  const merged: string[] = [];
+  let pending = "";
+
+  for (const unit of units) {
+    if (isHeadingOnlyUnit(unit)) {
+      pending += unit;
+      continue;
+    }
+    if (pending && !unit.trim()) {
+      pending += unit;
+      continue;
+    }
+    if (pending && separator && unit) pending += separator;
+    merged.push(pending + unit);
+    pending = "";
+  }
+
+  if (pending) merged.push(pending);
+  return merged;
+}
+
 function parseCustomSeparators(value: string | undefined): string[] {
   if (!value) return [];
   if (value.length > KNOWLEDGE_FILE_MAX_SPLITTER_LENGTH) {
@@ -283,6 +315,7 @@ function splitTextByCustomSeparators(
   text: string,
   maxLength: number,
   separators: string[],
+  overlapRatio: number,
 ): string[] {
   const units = separators.reduce<string[]>(
     (current, separator) =>
@@ -290,10 +323,10 @@ function splitTextByCustomSeparators(
     [text],
   ).filter((unit) => unit.trim());
 
-  return units.flatMap((unit) =>
+  return mergeHeadingUnits(units, "\n").flatMap((unit) =>
     unit.length <= maxLength
       ? [unit]
-      : splitTextRecursively(unit, maxLength),
+      : splitTextRecursively(unit, maxLength, 0, overlapRatio, true),
   );
 }
 
@@ -326,12 +359,22 @@ function splitTextRecursively(
   maxLength: number,
   level = 0,
   overlapRatio = FASTGPT_OVERLAP_RATIO,
+  preserveHeadingUnits = false,
 ): string[] {
   if (text.length <= maxLength) return [text];
 
-  const units = getSplitUnits(text, level);
+  let units = getSplitUnits(text, level);
+  if (preserveHeadingUnits) {
+    units = mergeHeadingUnits(units);
+  }
   if (units.length <= 1 && level < 5) {
-    return splitTextRecursively(text, maxLength, level + 1, overlapRatio);
+    return splitTextRecursively(
+      text,
+      maxLength,
+      level + 1,
+      overlapRatio,
+      preserveHeadingUnits,
+    );
   }
 
   const chunks: string[] = [];
@@ -363,7 +406,13 @@ function splitTextRecursively(
     if (unit.length > maxChunkLength) {
       pushCurrent();
       chunks.push(
-        ...splitTextRecursively(unit, maxLength, Math.min(level + 1, 5), overlapRatio),
+        ...splitTextRecursively(
+          unit,
+          maxLength,
+          Math.min(level + 1, 5),
+          overlapRatio,
+          preserveHeadingUnits,
+        ),
       );
       currentUnits = [];
       currentNewUnits = [];
@@ -484,6 +533,7 @@ function splitSectionContent(
       content,
       settings.chunkSize,
       settings.customSeparators,
+      settings.overlapRatio,
     );
   }
   if (content.length <= settings.chunkSize) return [content];
@@ -503,6 +553,7 @@ function splitSectionContent(
     bodySize,
     0,
     settings.overlapRatio,
+    settings.candidateTitleMode === "content",
   );
   return bodyChunks.map((chunk) => headingPrefix + chunk);
 }

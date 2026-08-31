@@ -205,6 +205,8 @@ describe("knowledge file import parser", () => {
 
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks[0]?.title).toBe("标题");
+    expect(chunks[0]?.content).toContain("# 标题");
+    expect(chunks.some((chunk) => chunk.content.includes("# 标题"))).toBe(true);
     expect(chunks.every((chunk) => chunk.title.trim().length > 0)).toBe(true);
     expect(chunks.every((chunk) => chunk.title.length <= 80)).toBe(true);
   });
@@ -221,6 +223,31 @@ describe("knowledge file import parser", () => {
 
     expect(chunks.map((chunk) => chunk.content)).toEqual(["第一段", "第二段", "第三段"]);
     expect(chunks.map((chunk) => chunk.title)).toEqual(["第一段", "第二段", "第三段"]);
+  });
+
+  test("char mode retains a heading before long content", () => {
+    const text = "# 标题\n\n" + "正文。".repeat(80);
+    const chunks = splitKnowledgeFile(
+      text,
+      customOptions({
+        chunkSplitMode: "char",
+        chunkSplitter: "\\n\\n",
+        chunkSize: 64,
+      }),
+    );
+
+    expect(chunks[0]?.title).toBe("标题");
+    expect(chunks[0]?.content).toContain("# 标题");
+    expect(chunks.some((chunk) => chunk.content.includes("# 标题"))).toBe(true);
+  });
+
+  test("does not create a candidate from a heading without body in size mode", () => {
+    expect(
+      splitKnowledgeFile(
+        "# 只有标题",
+        customOptions({ chunkSplitMode: "size", paragraphChunkDeep: 0 }),
+      ),
+    ).toHaveLength(0);
   });
 
   test("limits long extracted titles without changing candidate content", () => {
