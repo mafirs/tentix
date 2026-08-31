@@ -161,9 +161,10 @@ const knowledgeFilePreviewSchema = z
     fileSizeBytes: z.number().int().positive().max(KNOWLEDGE_FILE_MAX_BYTES),
     rawText: z.string(),
     chunkSettingMode: z.enum(["auto", "custom"]),
-    chunkSplitMode: z.enum(["paragraph"]).optional(),
+    chunkSplitMode: z.enum(["paragraph", "size", "char"]).optional(),
     paragraphChunkDeep: z.number().int().min(1).max(8).optional(),
     chunkSize: z.number().int().min(64).max(4000).optional(),
+    chunkSplitter: z.string().max(200).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -243,6 +244,12 @@ function getKnowledgeValidationMessage(
   }
   if (path === "fileSizeBytes" || path === "rawText") {
     return t("knowledge_error.file_size");
+  }
+  if (path === "title" && issue.code === "too_big") {
+    return t("knowledge_error.title_max", { max: issue.maximum });
+  }
+  if (path === "chunkSplitter" && issue.code === "too_big") {
+    return t("knowledge_error.chunk_splitter");
   }
   return t("knowledge_error.invalid_request");
 }
@@ -732,6 +739,7 @@ const kbRouter = factory
           chunkSplitMode: payload.chunkSplitMode,
           paragraphChunkDeep: payload.paragraphChunkDeep,
           chunkSize: payload.chunkSize,
+          chunkSplitter: payload.chunkSplitter,
         });
       } catch (error) {
         if (error instanceof KnowledgeFileParseError) {

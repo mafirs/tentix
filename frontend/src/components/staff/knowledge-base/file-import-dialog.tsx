@@ -36,8 +36,9 @@ import {
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_MODULES = 10;
 const MAX_INDEXES = 3;
+const MAX_TITLE_LENGTH = 200;
 type ChunkSettingMode = "auto" | "custom";
-type ChunkSplitMode = "paragraph";
+type ChunkSplitMode = "paragraph" | "size" | "char";
 type FileImportStep = "file" | "settings" | "preview" | "confirm";
 
 type FileImportDialogProps = {
@@ -87,6 +88,12 @@ async function getErrorMessage(response: Response, fallback: string): Promise<st
 function getThrownErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return getResponseMessage(error, fallback);
+}
+
+function isValidChunkSplitter(value: string): boolean {
+  if (!value || value.length > 200) return false;
+  const separators = value.replace(/\\n/g, "\n").split("|");
+  return separators.length <= 10 && separators.every((separator) => separator.length > 0);
 }
 
 function normalizeDuplicateContent(content: string): string {
@@ -146,6 +153,9 @@ async function saveFileImportCandidate(
 function validateCandidate(candidate: FileImportCandidate, t: TranslationFunction): KnowledgeFieldErrors | undefined {
   const errors: KnowledgeFieldErrors = {};
   if (!candidate.title.trim()) errors.title = t("knowledge_file_import.error_title_required");
+  if (candidate.title.trim().length > MAX_TITLE_LENGTH) {
+    errors.title = t("knowledge_file_import.error_title_max");
+  }
   if (candidate.modules.length === 0) errors.modules = t("knowledge_file_import.error_modules_required");
   if (candidate.modules.length > MAX_MODULES) {
     errors.modules = t("knowledge_file_import.error_modules_max", { max: MAX_MODULES });
@@ -191,11 +201,13 @@ export function FileImportDialog({
     chunkSplitMode: ChunkSplitMode;
     paragraphChunkDeep: number;
     chunkSize: number;
+    chunkSplitter: string;
   }>({
     chunkSettingMode: "auto",
     chunkSplitMode: "paragraph",
     paragraphChunkDeep: 3,
     chunkSize: 1000,
+    chunkSplitter: "",
   });
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
@@ -345,12 +357,19 @@ export function FileImportDialog({
         setErrorMessage(t("knowledge_file_import.error_chunk_size"));
         return;
       }
-      if (
+      if (splitOptions.chunkSplitMode === "paragraph" && (
         !Number.isInteger(splitOptions.paragraphChunkDeep) ||
         splitOptions.paragraphChunkDeep < 1 ||
         splitOptions.paragraphChunkDeep > 8
-      ) {
+      )) {
         setErrorMessage(t("knowledge_file_import.error_title_depth"));
+        return;
+      }
+      if (
+        splitOptions.chunkSplitMode === "char" &&
+        !isValidChunkSplitter(splitOptions.chunkSplitter)
+      ) {
+        setErrorMessage(t("knowledge_file_import.error_chunk_splitter"));
         return;
       }
     }
@@ -370,6 +389,10 @@ export function FileImportDialog({
             chunkSplitMode: splitOptions.chunkSplitMode,
             paragraphChunkDeep: splitOptions.paragraphChunkDeep,
             chunkSize: splitOptions.chunkSize,
+            ...(splitOptions.chunkSettingMode === "custom" &&
+            splitOptions.chunkSplitMode === "char"
+              ? { chunkSplitter: splitOptions.chunkSplitter }
+              : {}),
           },
         },
         { fetch: kbFilePreviewFetch },
@@ -920,31 +943,81 @@ export function FileImportDialog({
               {splitOptions.chunkSettingMode === "custom" ? (
                 <div className="grid gap-4 rounded-xl border border-border p-5">
                   <div className="grid gap-2">
-                    <p className="text-sm font-medium">{t("knowledge_file_import.chunk_paragraph_title")}</p>
+                    <p className="text-sm font-medium">{t(
+                      splitOptions.chunkSplitMode === "paragraph"
+                        ? "knowledge_file_import.chunk_paragraph_title"
+                        : splitOptions.chunkSplitMode === "size"
+                          ? "knowledge_file_import.chunk_size_title"
+                          : "knowledge_file_import.chunk_separator_title",
+                    )}</p>
                     <p className="text-xs text-muted-foreground">
-                      {t("knowledge_file_import.chunk_paragraph_description")}
+                      {t(
+                        splitOptions.chunkSplitMode === "paragraph"
+                          ? "knowledge_file_import.chunk_split_paragraph_hint"
+                          : splitOptions.chunkSplitMode === "size"
+                            ? "knowledge_file_import.chunk_split_size_hint"
+                            : "knowledge_file_import.chunk_split_char_hint",
+                      )}
                     </p>
                   </div>
+                  <div className="grid gap-2">
+                    <Label>{t("knowledge_file_import.chunk_split_mode")}</Label>
+                    <Select
+                      value={splitOptions.chunkSplitMode}
+                      disabled={isParsing || isImporting}
+                      onValueChange={(value) =>
+                        setSplitOptions((current) => ({
+                          ...current,
+                          chunkSplitMode: value as ChunkSplitMode,
+                        }))
+                      }
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="paragraph">{t("knowledge_file_import.chunk_split_paragraph")}</SelectItem>
+                        <SelectItem value="size">{t("knowledge_file_import.chunk_split_size")}</SelectItem>
+                        <SelectItem value="char">{t("knowledge_file_import.chunk_split_char")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="grid gap-2">
-                      <Label>{t("knowledge_file_import.title_depth")}</Label>
-                      <Select
-                        value={String(splitOptions.paragraphChunkDeep)}
-                        onValueChange={(value) =>
-                          setSplitOptions((current) => ({ ...current, paragraphChunkDeep: Number(value) }))
-                        }
-                      >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
-                            <SelectItem key={level} value={String(level)}>
-                              {t("knowledge_file_import.title_depth_option", { level })}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">{t("knowledge_file_import.deeper_title_hint")}</p>
-                    </div>
+                    {splitOptions.chunkSplitMode === "paragraph" ? (
+                      <div className="grid gap-2">
+                        <Label>{t("knowledge_file_import.title_depth")}</Label>
+                        <Select
+                          value={String(splitOptions.paragraphChunkDeep)}
+                          disabled={isParsing || isImporting}
+                          onValueChange={(value) =>
+                            setSplitOptions((current) => ({ ...current, paragraphChunkDeep: Number(value) }))
+                          }
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map((level) => (
+                              <SelectItem key={level} value={String(level)}>
+                                {t("knowledge_file_import.title_depth_option", { level })}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">{t("knowledge_file_import.deeper_title_hint")}</p>
+                      </div>
+                    ) : null}
+                    {splitOptions.chunkSplitMode === "char" ? (
+                      <div className="grid gap-2">
+                        <Label htmlFor="chunk-splitter">{t("knowledge_file_import.chunk_separator")}</Label>
+                        <Input
+                          id="chunk-splitter"
+                          placeholder={t("knowledge_file_import.chunk_separator_placeholder")}
+                          value={splitOptions.chunkSplitter}
+                          disabled={isParsing || isImporting}
+                          onChange={(event) =>
+                            setSplitOptions((current) => ({ ...current, chunkSplitter: event.target.value }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">{t("knowledge_file_import.chunk_separator_hint")}</p>
+                      </div>
+                    ) : null}
                     <div className="grid gap-2">
                       <Label htmlFor="chunk-size">{t("knowledge_file_import.chunk_size")}</Label>
                       <Input

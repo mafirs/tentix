@@ -196,6 +196,55 @@ describe("knowledge file import parser", () => {
     }
   });
 
+  test("size mode ignores heading boundaries and derives editable titles from candidate content", () => {
+    const text = "# 标题\n\n" + "第一个句子。第二个句子。".repeat(80);
+    const chunks = splitKnowledgeFile(
+      text,
+      customOptions({ chunkSplitMode: "size", paragraphChunkDeep: 0, chunkSize: 64 }),
+    );
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]?.title).toBe("标题");
+    expect(chunks.every((chunk) => chunk.title.trim().length > 0)).toBe(true);
+    expect(chunks.every((chunk) => chunk.title.length <= 80)).toBe(true);
+  });
+
+  test("char mode splits by literal custom separators without overlap", () => {
+    const chunks = splitKnowledgeFile(
+      "第一段\n\n第二段====第三段",
+      customOptions({
+        chunkSplitMode: "char",
+        chunkSplitter: "\\n\\n|====",
+        chunkSize: 1200,
+      }),
+    );
+
+    expect(chunks.map((chunk) => chunk.content)).toEqual(["第一段", "第二段", "第三段"]);
+    expect(chunks.map((chunk) => chunk.title)).toEqual(["第一段", "第二段", "第三段"]);
+  });
+
+  test("limits long extracted titles without changing candidate content", () => {
+    const text = "长文本".repeat(100) + "。";
+    const [chunk] = splitKnowledgeFile(
+      text,
+      customOptions({ chunkSplitMode: "size", paragraphChunkDeep: 0, chunkSize: 1200 }),
+    );
+
+    expect(chunk?.title.length).toBeLessThanOrEqual(80);
+    expect(chunk?.content).toContain(text);
+  });
+
+  test("rejects an empty, over-count, or over-length custom separator setting", () => {
+    for (const chunkSplitter of ["", "a||b", "a|b|c|d|e|f|g|h|i|j|k", "a".repeat(201)]) {
+      expect(() =>
+        splitKnowledgeFile(
+          "内容",
+          customOptions({ chunkSplitMode: "char", chunkSplitter }),
+        ),
+      ).toThrow("knowledge_error.chunk_splitter");
+    }
+  });
+
   test("filters a heading without a knowledge body", () => {
     expect(
       splitKnowledgeFile("# 只有标题", customOptions()),

@@ -7,12 +7,16 @@ const FASTGPT_OVERLAP_RATIO = 0.2;
 const FASTGPT_AUTO_PARAGRAPH_DEEP = 3;
 const KNOWLEDGE_FILE_MIN_CHUNK_SIZE = 64;
 const KNOWLEDGE_FILE_MAX_CHUNK_SIZE = 4000;
+const KNOWLEDGE_FILE_MAX_SPLITTER_LENGTH = 200;
+const KNOWLEDGE_FILE_MAX_SPLITTERS = 10;
+const KNOWLEDGE_FILE_AUTO_TITLE_MAX_LENGTH = 80;
 
 export type KnowledgeFileSplitOptions = {
   chunkSettingMode: "auto" | "custom";
-  chunkSplitMode?: "paragraph";
+  chunkSplitMode?: "paragraph" | "size" | "char";
   paragraphChunkDeep?: number;
   chunkSize?: number;
+  chunkSplitter?: string;
 };
 
 export type KnowledgeFileCandidate = {
@@ -23,6 +27,7 @@ export type KnowledgeFileCandidate = {
 export type KnowledgeFileParseErrorKey =
   | "knowledge_error.chunk_size"
   | "knowledge_error.title_depth"
+  | "knowledge_error.chunk_splitter"
   | "knowledge_error.candidates_max"
   | "knowledge_error.file_missing"
   | "knowledge_error.file_name"
@@ -47,6 +52,8 @@ type FastGPTSplitSettings = {
   chunkSize: number;
   paragraphChunkDeep: number;
   overlapRatio: number;
+  customSeparators: string[];
+  candidateTitleMode: "heading" | "content";
 };
 
 type FastGPTChunk = {
@@ -87,6 +94,8 @@ function resolveFastGPTSettings(
       chunkSize: FASTGPT_AUTO_CHUNK_SIZE,
       paragraphChunkDeep: FASTGPT_AUTO_PARAGRAPH_DEEP,
       overlapRatio: FASTGPT_OVERLAP_RATIO,
+      customSeparators: [],
+      candidateTitleMode: "heading",
     };
   }
 
@@ -99,20 +108,33 @@ function resolveFastGPTSettings(
     throw new KnowledgeFileParseError("knowledge_error.chunk_size");
   }
 
+  const chunkSplitMode = options.chunkSplitMode ?? "paragraph";
   const paragraphChunkDeep =
-    options.paragraphChunkDeep ?? FASTGPT_AUTO_PARAGRAPH_DEEP;
-  if (
+    chunkSplitMode === "paragraph"
+      ? options.paragraphChunkDeep ?? FASTGPT_AUTO_PARAGRAPH_DEEP
+      : 0;
+  if (chunkSplitMode === "paragraph" && (
     !Number.isInteger(paragraphChunkDeep) ||
     paragraphChunkDeep < 1 ||
     paragraphChunkDeep > 8
-  ) {
+  )) {
     throw new KnowledgeFileParseError("knowledge_error.title_depth");
+  }
+
+  const customSeparators =
+    chunkSplitMode === "char"
+      ? parseCustomSeparators(options.chunkSplitter)
+      : [];
+  if (chunkSplitMode === "char" && customSeparators.length === 0) {
+    throw new KnowledgeFileParseError("knowledge_error.chunk_splitter");
   }
 
   return {
     chunkSize,
     paragraphChunkDeep,
     overlapRatio: FASTGPT_OVERLAP_RATIO,
+    customSeparators,
+    candidateTitleMode: chunkSplitMode === "paragraph" ? "heading" : "content",
   };
 }
 
@@ -240,6 +262,63 @@ function getSplitUnits(text: string, level: number): string[] {
   if (level === 3) return getPunctuationUnits(text);
   if (level === 4) return getWordUnits(text);
   return Array.from(text);
+}
+
+function parseCustomSeparators(value: string | undefined): string[] {
+  if (!value) return [];
+  if (value.length > KNOWLEDGE_FILE_MAX_SPLITTER_LENGTH) {
+    throw new KnowledgeFileParseError("knowledge_error.chunk_splitter");
+  }
+  const separators = value.replace(/\\n/g, "\n").split("|");
+  if (
+    separators.length > KNOWLEDGE_FILE_MAX_SPLITTERS ||
+    separators.some((separator) => separator.length === 0)
+  ) {
+    throw new KnowledgeFileParseError("knowledge_error.chunk_splitter");
+  }
+  return separators;
+}
+
+function splitTextByCustomSeparators(
+  text: string,
+  maxLength: number,
+  separators: string[],
+): string[] {
+  const units = separators.reduce<string[]>(
+    (current, separator) =>
+      current.flatMap((unit) => unit.split(separator)),
+    [text],
+  ).filter((unit) => unit.trim());
+
+  return units.flatMap((unit) =>
+    unit.length <= maxLength
+      ? [unit]
+      : splitTextRecursively(unit, maxLength),
+  );
+}
+
+function limitGeneratedCandidateTitle(value: string): string {
+  return Array.from(value.trim())
+    .slice(0, KNOWLEDGE_FILE_AUTO_TITLE_MAX_LENGTH)
+    .join("");
+}
+
+function getGeneratedCandidateTitle(content: string): string {
+  const lines = content.split("\n");
+  let firstText = "";
+  let inFence = false;
+  for (const line of lines) {
+    if (!inFence) {
+      const heading = getHeading(line);
+      if (heading) return limitGeneratedCandidateTitle(heading.title);
+    }
+    if (!inFence && !firstText && line.trim() && !isFence(line)) {
+      firstText = line.trim();
+    }
+    if (isFence(line)) inFence = !inFence;
+  }
+  const firstSentence = getSentenceUnits(firstText)[0]?.trim() ?? "";
+  return limitGeneratedCandidateTitle(firstSentence || firstText);
 }
 
 function splitTextRecursively(
@@ -400,6 +479,13 @@ function splitSectionContent(
   title: string,
   settings: FastGPTSplitSettings,
 ): string[] {
+  if (settings.customSeparators.length) {
+    return splitTextByCustomSeparators(
+      content,
+      settings.chunkSize,
+      settings.customSeparators,
+    );
+  }
   if (content.length <= settings.chunkSize) return [content];
 
   const contentLines = content.split("\n");
@@ -431,7 +517,13 @@ function splitText2ChunksFastGPT(
     if (!content.trim() || !hasKnowledgeBody(content)) continue;
     for (const splitContent of splitSectionContent(content, section.title, settings)) {
       if (splitContent.trim()) {
-        chunks.push({ content: splitContent, title: section.title });
+        chunks.push({
+          content: splitContent,
+          title:
+            settings.candidateTitleMode === "content"
+              ? getGeneratedCandidateTitle(splitContent)
+              : section.title,
+        });
         if (chunks.length > KNOWLEDGE_FILE_MAX_CANDIDATES) {
           throw new KnowledgeFileParseError("knowledge_error.candidates_max");
         }
