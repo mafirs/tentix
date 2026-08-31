@@ -516,12 +516,19 @@ export function FileImportDialog({
     const validItems = validation
       .filter((item) => !item.errors)
       .map((item) => item.candidate);
+
+    setErrorMessage(
+      invalidItems.length > 0
+        ? t("knowledge_file_import.error_fix_required")
+        : "",
+    );
+
     if (trackProgress) {
-      setIndexProgress({
-        total: items.length,
-        completed: invalidItems.length,
-      });
-      setIsGeneratingIndexes(true);
+      setIndexProgress(
+        validItems.length > 0
+          ? { total: validItems.length, completed: 0 }
+          : null,
+      );
     }
     setCandidates((current) =>
       current.map((candidate) => {
@@ -546,6 +553,11 @@ export function FileImportDialog({
         };
       }),
     );
+
+    if (!validItems.length) return;
+    if (trackProgress) {
+      setIsGeneratingIndexes(true);
+    }
 
     try {
       await runWithConcurrency(validItems, 2, async (candidate) => {
